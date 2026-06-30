@@ -83,6 +83,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     private final java.util.Map<Long, String>  dsIdToName = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, Long>  dsNameToId = new java.util.LinkedHashMap<>();
     private boolean showBrokenOnly    = false;  // show only files with no thumbnail
+    private volatile String searchText = null;  // case-insensitive filename substring filter
 
     // Selection
     private final Set<Integer>  selected  = new LinkedHashSet<>();
@@ -315,8 +316,42 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                     loaderPool.submit(EnhancedGalleryTopComponent.this::syncTagsFromAutopsy);
                     loadTagNamesFromAutopsy();
                 });
-            }
+            },
+            typeIdWarning -> SwingUtilities.invokeLater(() -> showTypeIdWarning(typeIdWarning))
         ));
+    }
+
+    /** Per-session storage of the last Type-ID warning, shown via the status bar icon. */
+    private Map<String, Integer> lastTypeIdWarning = null;
+
+    /**
+     * Called once after loading if some data sources have media-extension files
+     * with no MIME type (File Type Identification likely didn't run on them).
+     * Shows a one-time dialog and leaves a persistent clickable warning icon
+     * in the status bar so the user can review it again later.
+     */
+    private void showTypeIdWarning(Map<String, Integer> warning) {
+        lastTypeIdWarning = warning;
+        if (statusBar != null) statusBar.setTypeIdWarning(warning, this::showTypeIdWarningDialog);
+        showTypeIdWarningDialog();
+    }
+
+    private void showTypeIdWarningDialog() {
+        if (lastTypeIdWarning == null || lastTypeIdWarning.isEmpty()) return;
+        StringBuilder sb = new StringBuilder();
+        sb.append("Some data sources have files with a media extension (.jpg, .mp4, ...) ")
+          .append("but no detected file type.\n")
+          .append("File Type Identification likely did not run on them — ")
+          .append("these files are NOT shown in the gallery (loading is by file type, not extension).\n\n");
+        int total = 0;
+        for (Map.Entry<String, Integer> e : lastTypeIdWarning.entrySet()) {
+            sb.append("  • ").append(e.getKey()).append(":  ").append(e.getValue()).append(" file(s)\n");
+            total += e.getValue();
+        }
+        sb.append("\nTotal: ").append(total).append(" file(s) not shown.\n")
+          .append("To fix: re-run ingest on these data sources with \"File Type Identification\" enabled.");
+        JOptionPane.showMessageDialog(this, sb.toString(),
+                "File Type Identification not run", JOptionPane.WARNING_MESSAGE);
     }
 
     // â”€â”€ Filter + render pipeline â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -433,6 +468,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         final boolean broken = showBrokenOnly;
         final String  grpBy  = groupBy;
         final GpsCache gps   = gpsCache;
+        final String  search = (searchText == null || searchText.isBlank())
+                ? null : searchText.trim().toLowerCase();
 
         filterPool.submit(() -> {
             // If a newer request came in, skip this one
@@ -449,6 +486,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 .filter(mf -> grpKey == null || matchesGroupKey(mf, grpKey, grpBy))
                 .filter(mf -> mf.matchesFilters(st, ty, geo, gps))
                 .filter(mf -> !broken || mf.isThumbnailFailed())
+                .filter(mf -> search == null || mf.getName().toLowerCase().contains(search))
                 .collect(java.util.stream.Collectors.toList());
 
             // Check again â€” might have been superseded during collect
@@ -855,6 +893,11 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         geoOnly = !geoOnly;
         applyFilters();
     }
+    /** Sets the filename search text (case-insensitive substring match) and re-filters. */
+    public void setSearchText(String text) {
+        searchText = text;
+        applyFilters();
+    }
     public void setThumbSize(int px) {
         thumbSize = px;
         thumbnailGrid.setThumbSize(px);
@@ -939,6 +982,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         final Long   dsId  = (ds == null) ? null : dsNameToId.get(ds);
         final String grpBy = groupBy;
         if (rebuildOverlay != null) rebuildOverlay.showOverlay();
+        groupSidebar.captureScrollPosition();
         rebuildPool.submit(() -> {
             List<MediaFile> snap;
             synchronized (allFiles) { snap = new ArrayList<>(allFiles); }

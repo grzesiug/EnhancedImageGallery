@@ -14,6 +14,7 @@ class StatusBar extends JPanel {
     private final JLabel      hintLabel    = new JLabel("Click · Ctrl+click · Shift+click range · Dbl-click open");
     private final JProgressBar loadProgress = new JProgressBar(0, 100);
     private final JLabel      loadLabel    = new JLabel("");
+    private final JLabel      typeIdWarningLabel = new JLabel("⚠ Type ID");
 
     StatusBar(GalleryPanel mediator) {
         this(mediator, null);
@@ -51,11 +52,18 @@ class StatusBar extends JPanel {
         loadLabel.setForeground(new Color(100, 100, 120));
         loadLabel.setVisible(false);
 
+        typeIdWarningLabel.setFont(typeIdWarningLabel.getFont().deriveFont(Font.BOLD, 11f));
+        typeIdWarningLabel.setForeground(new Color(0xB45309));
+        typeIdWarningLabel.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+        typeIdWarningLabel.setVisible(false);
+        typeIdWarningLabel.setToolTipText("Some files were not loaded — File Type Identification did not run on their data source. Click for details.");
+
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         left.setOpaque(false);
         left.add(countLabel);
         left.add(makeSep());
         left.add(hintLabel);
+        left.add(typeIdWarningLabel);
 
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         right.setOpaque(false);
@@ -120,6 +128,23 @@ class StatusBar extends JPanel {
             loadProgress.setVisible(true);
             loadLabel.setVisible(true);
         }
+        revalidate(); repaint();
+    }
+
+    /** Shows (or hides, if warning is empty) the persistent Type-ID warning icon. */
+    void setTypeIdWarning(java.util.Map<String, Integer> warning, Runnable onClick) {
+        for (java.awt.event.MouseListener ml : typeIdWarningLabel.getMouseListeners())
+            typeIdWarningLabel.removeMouseListener(ml);
+        if (warning == null || warning.isEmpty()) {
+            typeIdWarningLabel.setVisible(false);
+            return;
+        }
+        int total = warning.values().stream().mapToInt(Integer::intValue).sum();
+        typeIdWarningLabel.setText("⚠ " + total + " file(s) not loaded (Type ID)");
+        typeIdWarningLabel.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mouseClicked(java.awt.event.MouseEvent e) { onClick.run(); }
+        });
+        typeIdWarningLabel.setVisible(true);
         revalidate(); repaint();
     }
 

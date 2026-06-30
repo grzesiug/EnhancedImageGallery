@@ -26,6 +26,13 @@ public class GroupSidebar extends JPanel {
     private final DefaultListModel<GroupEntry> model = new DefaultListModel<>();
     private final JList<GroupEntry>            list  = new JList<>(model);
     private final JLabel headerLabel                 = new JLabel("Folders");
+    private JScrollPane scroll; // set in constructor — used to preserve scroll position across rebuilds
+    private volatile Point savedScrollPos = null;
+
+    /** Captures current scroll position. Must be called on EDT before triggering a background rebuild. */
+    public void captureScrollPosition() {
+        if (scroll != null) savedScrollPos = scroll.getViewport().getViewPosition();
+    }
 
     // Sort buttons (toggle ascend/descend on each click)
     private final JToggleButton btnName   = sortBtn("Name");
@@ -35,6 +42,9 @@ public class GroupSidebar extends JPanel {
 
     // Cached entries for re-sorting without re-building
     private List<GroupEntry> lastEntries = new ArrayList<>();
+    private volatile String groupFilterText = null; // case-insensitive substring filter on group name
+    private final JTextField groupSearchField = new JTextField();
+    private final javax.swing.Timer groupSearchDebounce = new javax.swing.Timer(250, null);
 
     record GroupEntry(String key, String display, int total, int unseen) {}
 
@@ -65,9 +75,41 @@ public class GroupSidebar extends JPanel {
         sortBar.add(new JLabel("Sort:"));
         sortBar.add(btnName); sortBar.add(btnCount); sortBar.add(btnUnseen);
 
+        // Group filter (search box)
+        groupSearchField.setFont(groupSearchField.getFont().deriveFont(12f));
+        groupSearchField.setToolTipText("Filter the group list by name (case-insensitive)");
+        groupSearchField.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(0xC5C8DC)),
+                new EmptyBorder(2, 4, 2, 4)));
+        groupSearchDebounce.setRepeats(false);
+        groupSearchDebounce.addActionListener(e -> {
+            groupFilterText = groupSearchField.getText();
+            reapplyFilterAndSort();
+        });
+        groupSearchField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override public void insertUpdate(javax.swing.event.DocumentEvent e)  { groupSearchDebounce.restart(); }
+            @Override public void removeUpdate(javax.swing.event.DocumentEvent e)  { groupSearchDebounce.restart(); }
+            @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { groupSearchDebounce.restart(); }
+        });
+        JButton groupSearchClear = new JButton("✕");
+        groupSearchClear.setMargin(new Insets(0, 3, 0, 3));
+        groupSearchClear.setFont(groupSearchClear.getFont().deriveFont(9f));
+        groupSearchClear.setToolTipText("Clear filter");
+        groupSearchClear.addActionListener(e -> {
+            groupSearchField.setText("");
+            groupFilterText = null;
+            reapplyFilterAndSort();
+        });
+        JPanel searchBar = new JPanel(new BorderLayout(3, 0));
+        searchBar.setOpaque(false);
+        searchBar.setBorder(new EmptyBorder(2, 6, 2, 6));
+        searchBar.add(groupSearchField, BorderLayout.CENTER);
+        searchBar.add(groupSearchClear, BorderLayout.EAST);
+
         JPanel northPanel = new JPanel(new BorderLayout());
         northPanel.setOpaque(false);
         northPanel.add(headerLabel, BorderLayout.NORTH);
+        northPanel.add(searchBar,   BorderLayout.CENTER);
         northPanel.add(sortBar,     BorderLayout.SOUTH);
 
         // File list
@@ -84,11 +126,30 @@ public class GroupSidebar extends JPanel {
                         ? null : entry.key());
         });
 
-        JScrollPane scroll = new JScrollPane(list);
+        scroll = new JScrollPane(list);
         scroll.setBorder(null);
 
         add(northPanel, BorderLayout.NORTH);
         add(scroll,     BorderLayout.CENTER);
+    }
+
+    // ── Group filter ──────────────────────────────────────────────────────────
+
+    /** Keeps "All files" entry always visible; filters the rest by display name substring. */
+    private List<GroupEntry> filtered(List<GroupEntry> entries) {
+        if (groupFilterText == null || groupFilterText.isBlank()) return entries;
+        String q = groupFilterText.trim().toLowerCase();
+        List<GroupEntry> out = new ArrayList<>();
+        for (GroupEntry e : entries) {
+            if (GroupKeyHelper.ALL.equals(e.key()) || e.display().toLowerCase().contains(q))
+                out.add(e);
+        }
+        return out;
+    }
+
+    /** Re-applies filter + current sort on the cached (unfiltered) entries — used when filter text changes. */
+    private void reapplyFilterAndSort() {
+        if (!lastEntries.isEmpty()) resortAndDisplay();
     }
 
     // ── Sort logic ────────────────────────────────────────────────────────────
@@ -101,13 +162,18 @@ public class GroupSidebar extends JPanel {
             sortAsc  = (mode == SortMode.NAME); // name defaults asc, others desc
         }
         updateSortButtonLabels();
+        resortAndDisplay();
+    }
+
+    /** Sorts + filters lastEntries with the current sortMode/groupFilterText and updates the list. */
+    private void resortAndDisplay() {
         if (!lastEntries.isEmpty()) {
             // Capture state on EDT, do heavy work on rebuildPool, one invokeLater
             final List<GroupEntry> snap   = new ArrayList<>(lastEntries);
             final String selKey           = lastSelKey;
             final String currentHeader    = headerLabel.getText();
             parent.getRebuildPool().submit(() -> {
-                List<GroupEntry> sorted = sorted(snap);
+                List<GroupEntry> sorted = sorted(filtered(snap));
                 DefaultListModel<GroupEntry> newModel = new DefaultListModel<>();
                 int restoreIdx = 0;
                 for (int i = 0; i < sorted.size(); i++) {
@@ -219,7 +285,9 @@ public class GroupSidebar extends JPanel {
         final String selKey = lastSelKey;
 
         // Sort + build model on current thread (rebuildPool) — never blocks EDT
-        List<GroupEntry> sorted = sorted(entries);
+        // lastEntries keeps the UNFILTERED list (used for header count + re-filter);
+        // filtered() is applied only when building what's actually displayed.
+        List<GroupEntry> sorted = sorted(filtered(entries));
         DefaultListModel<GroupEntry> newModel = new DefaultListModel<>();
         int restoreIdx = 0;
         for (int i = 0; i < sorted.size(); i++) {
@@ -235,7 +303,14 @@ public class GroupSidebar extends JPanel {
                 list.removeListSelectionListener(l);
             list.setModel(finalModel);
             list.setSelectedIndex(finalIdx);
-            if (finalIdx >= 0) list.ensureIndexIsVisible(finalIdx);
+            // Restore scroll position instead of jumping to the selected group —
+            // a group's position can shift (e.g. after sort-by-unseen) without the
+            // user wanting the view to follow it.
+            if (savedScrollPos != null) {
+                scroll.getViewport().setViewPosition(savedScrollPos);
+            } else if (finalIdx >= 0) {
+                list.ensureIndexIsVisible(finalIdx); // first load — no saved position yet
+            }
             headerLabel.setText(header);
             updateSortButtonLabels();
             list.addListSelectionListener(e -> {
@@ -267,9 +342,9 @@ public class GroupSidebar extends JPanel {
             p.setBorder(new EmptyBorder(2, 6, 2, 4));
 
             if (isSelected) {
-                p.setBackground(new Color(0xD0E4FF));
+                p.setBackground(new Color(0xA9C8FF)); // stronger, more saturated than before
                 p.setBorder(new javax.swing.border.CompoundBorder(
-                        new MatteBorder(0, 3, 0, 0, ACTIVE),
+                        new MatteBorder(0, 5, 0, 0, ACTIVE), // thicker accent bar
                         new EmptyBorder(2, 4, 2, 4)));
             } else if (e.unseen() > 0) {
                 p.setBackground(UNSEEN_BG);
@@ -282,7 +357,7 @@ public class GroupSidebar extends JPanel {
 
             JLabel lbl = new JLabel(
                     "<html>" + name + " <font color='gray'>(" + e.total() + ")</font></html>");
-            lbl.setFont(lbl.getFont().deriveFont(12f));
+            lbl.setFont(lbl.getFont().deriveFont(isSelected ? Font.BOLD : Font.PLAIN, 12f));
             lbl.setToolTipText(e.display());
             p.add(lbl, BorderLayout.CENTER);
 

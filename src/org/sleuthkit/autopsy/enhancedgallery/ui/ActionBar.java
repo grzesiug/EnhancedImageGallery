@@ -40,6 +40,10 @@ public class ActionBar extends JPanel {
     private final JButton markSelSeenBtn   = new JButton("Mark selected seen");
     private final JButton markGroupSeenBtn = new JButton("Mark group seen");
 
+    // File name search (within current group/filter)
+    private final JTextField searchField = new JTextField(14);
+    private final javax.swing.Timer searchDebounce = new javax.swing.Timer(250, null);
+
     public ActionBar(EnhancedGalleryTopComponent parent) {
         this.parent = parent;
         setLayout(new FlowLayout(FlowLayout.LEFT, 4, 3));
@@ -103,6 +107,27 @@ public class ActionBar extends JPanel {
         JPanel sizePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
         sizePanel.setOpaque(false);
         sizePanel.add(lbl("Size:")); sizePanel.add(sizeSlider); sizePanel.add(sizeLabel);
+
+        // ── File name search ─────────────────────────────────────────────────
+        searchField.setFont(searchField.getFont().deriveFont(12f));
+        searchField.setToolTipText("<html><b>Search files</b> — filters the currently visible "
+                + "group/filter by file name (case-insensitive, substring match).</html>");
+        searchDebounce.setRepeats(false);
+        searchDebounce.addActionListener(e -> parent.setSearchText(searchField.getText()));
+        searchField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override public void insertUpdate(javax.swing.event.DocumentEvent e)  { searchDebounce.restart(); }
+            @Override public void removeUpdate(javax.swing.event.DocumentEvent e)  { searchDebounce.restart(); }
+            @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { searchDebounce.restart(); }
+        });
+        JButton searchClearBtn = new JButton("✕");
+        searchClearBtn.setMargin(new Insets(0, 4, 0, 4));
+        searchClearBtn.setFont(searchClearBtn.getFont().deriveFont(10f));
+        searchClearBtn.setToolTipText("Clear search");
+        searchClearBtn.addActionListener(e -> { searchField.setText(""); parent.setSearchText(null); });
+
+        JPanel searchPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
+        searchPanel.setOpaque(false);
+        searchPanel.add(lbl("🔍")); searchPanel.add(searchField); searchPanel.add(searchClearBtn);
 
         // ── Tag dropdown ──────────────────────────────────────────────────────
         JPopupMenu tagMenu = buildTagMenu();
@@ -170,6 +195,8 @@ public class ActionBar extends JPanel {
         add(filtersGroup);
         add(vsep());
         add(sizePanel);
+        add(vsep());
+        add(searchPanel);
         add(vsep());
         add(tagBtn); add(allBtn); add(clearBtn);
         add(markSelSeenBtn); add(markGroupSeenBtn);
