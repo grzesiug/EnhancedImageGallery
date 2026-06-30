@@ -1,0 +1,74 @@
+name: Build and Release NBM
+
+on:
+  push:
+    tags:
+      - 'v*'          # triggers on: git tag v1.0.0 && git push --tags
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Cache Autopsy platform
+        # Autopsy must be pre-installed on the runner or downloaded here.
+        # For self-hosted runners with Autopsy installed, remove this step.
+        run: echo "Autopsy platform required — use self-hosted runner or download step"
+
+      - name: Download Autopsy 4.23.1 (if not cached)
+        id: autopsy
+        run: |
+          $autopsyDir = "C:\Program Files\Autopsy-4.23.1"
+          if (-not (Test-Path $autopsyDir)) {
+            Write-Host "Autopsy not found — please use a self-hosted runner with Autopsy installed."
+            exit 1
+          }
+          Write-Host "Autopsy found at $autopsyDir"
+
+      - name: Build NBM
+        run: |
+          $env:JAVA_HOME = "C:\Program Files\Autopsy-4.23.1\jre"
+          & "C:\Program Files\NetBeans-17\netbeans\extide\ant\bin\ant.bat" `
+            -f "${{ github.workspace }}" `
+            nbm
+        shell: pwsh
+
+      - name: Find NBM file
+        id: find_nbm
+        run: |
+          $nbm = Get-ChildItem -Path "build" -Filter "*.nbm" | Select-Object -First 1
+          echo "NBM_PATH=$($nbm.FullName)" >> $env:GITHUB_OUTPUT
+          echo "NBM_NAME=$($nbm.Name)" >> $env:GITHUB_OUTPUT
+        shell: pwsh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Enhanced Image Gallery ${{ github.ref_name }}"
+          body: |
+            ## Enhanced Image Gallery ${{ github.ref_name }}
+
+            ### Installation
+            1. Download `${{ steps.find_nbm.outputs.NBM_NAME }}` below
+            2. In Autopsy: **Tools → Plugins → Downloaded → Add Plugins…**
+            3. Select the `.nbm` file → **Install** → **Restart Autopsy**
+
+            ### Requirements
+            - Autopsy 4.23.1+
+            - Optional: ImageMagick, FFmpeg, dcraw (configure in ⚙ Settings)
+
+            See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full documentation.
+          files: ${{ steps.find_nbm.outputs.NBM_PATH }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

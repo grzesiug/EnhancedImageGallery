@@ -1,0 +1,9 @@
+/nbproject/private/
+/build/
+
+# Test/sample media and generated DB - not part of the module source
+gallery.db
+*.mp4
+*.webp
+*.wav
+*.mp3

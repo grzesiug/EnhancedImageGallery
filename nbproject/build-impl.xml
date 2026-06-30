@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    NetBeans build implementation — generated, do not edit by hand.
+    NetBeans will regenerate this file when the project is opened.
+-->
+<project name="org.sleuthkit.autopsy.enhancedgallery-impl" basedir="..">
+    <property file="nbproject/private/private.properties"/>
+    <property file="nbproject/project.properties"/>
+    <fail message="Please build using Ant 1.8.0 or higher.">
+        <condition><not><antversion atleast="1.8.0"/></not></condition>
+    </fail>
+    <import file="${harness.dir}/build.xml"/>
+</project>

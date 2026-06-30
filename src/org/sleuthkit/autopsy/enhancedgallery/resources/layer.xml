@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE filesystem PUBLIC "-//NetBeans//DTD Filesystem 1.2//EN"
+          "http://www.netbeans.org/dtds/filesystem-1_2.dtd">
+<filesystem>
+
+    <!-- Tools menu entry -->
+    <folder name="Menu">
+        <folder name="Tools">
+            <file name="org-sleuthkit-autopsy-enhancedgallery-OpenGalleryAction.shadow">
+                <attr name="originalFile"
+                      stringvalue="Actions/Tools/org-sleuthkit-autopsy-enhancedgallery-OpenGalleryAction.instance"/>
+                <attr name="position" intvalue="999"/>
+            </file>
+        </folder>
+    </folder>
+
+    <!-- Action registration -->
+    <folder name="Actions">
+        <folder name="Tools">
+            <!-- Tools menu entry: text only, no icon -->
+            <file name="org-sleuthkit-autopsy-enhancedgallery-OpenGalleryAction.instance">
+                <attr name="instanceCreate"
+                      methodvalue="org.openide.awt.Actions.alwaysEnabled"/>
+                <attr name="delegate"
+                      newvalue="org.sleuthkit.autopsy.enhancedgallery.ui.OpenGalleryAction"/>
+                <attr name="displayName"
+                      stringvalue="Enhanced Image Gallery"/>
+            </file>
+        </folder>
+        <folder name="Window">
+            <!-- Toolbar action: icon + name as tooltip -->
+            <file name="org-sleuthkit-autopsy-enhancedgallery-OpenGalleryAction-toolbar.instance">
+                <attr name="instanceCreate"
+                      methodvalue="org.openide.awt.Actions.alwaysEnabled"/>
+                <attr name="delegate"
+                      newvalue="org.sleuthkit.autopsy.enhancedgallery.ui.OpenGalleryAction"/>
+                <attr name="displayName"
+                      stringvalue="Enhanced Image Gallery"/>
+                <attr name="shortDescription"
+                      stringvalue="Enhanced Image Gallery — open gallery viewer"/>
+                <attr name="iconBase"
+                      stringvalue="org/sleuthkit/autopsy/enhancedgallery/resources/gallery.png"/>
+            </file>
+        </folder>
+    </folder>
+
+    <!-- TopComponent window -->
+    <folder name="Windows2">
+        <folder name="Components">
+            <file name="EnhancedGalleryTopComponent.settings"
+                  url="EnhancedGalleryTopComponentSettings.xml"/>
+        </folder>
+        <folder name="Modes">
+            <folder name="floating">
+                <file name="EnhancedGalleryTopComponent.wstcref"
+                      url="EnhancedGalleryTopComponentWstcref.xml"/>
+            </folder>
+        </folder>
+    </folder>
+
+    <!-- Autopsy top toolbar — dedicated EnhancedGallery toolbar group -->
+    <folder name="Toolbars">
+        <folder name="EnhancedGallery">
+            <attr name="displayName" stringvalue="Enhanced Gallery"/>
+            <attr name="position" intvalue="500"/>
+            <file name="org-sleuthkit-autopsy-enhancedgallery-OpenGalleryAction-toolbar.shadow">
+                <attr name="originalFile"
+                      stringvalue="Actions/Window/org-sleuthkit-autopsy-enhancedgallery-OpenGalleryAction-toolbar.instance"/>
+                <attr name="position" intvalue="100"/>
+            </file>
+        </folder>
+    </folder>
+
+    <!-- Options panel under Tools > Options > Advanced -->
+    <folder name="OptionsDialog">
+        <folder name="Advanced">
+            <file name="org-sleuthkit-autopsy-enhancedgallery-options-GalleryOptionsPanelController.instance">
+                <attr name="instanceCreate"
+                      methodvalue="org.openide.awt.Actions.alwaysEnabled"/>
+                <attr name="delegate"
+                      newvalue="org.sleuthkit.autopsy.enhancedgallery.options.GalleryOptionsPanelController"/>
+                <attr name="displayName"
+                      bundlevalue="org.sleuthkit.autopsy.enhancedgallery.resources.Bundle#CTL_OptionsDisplayName"/>
+                <attr name="iconBase"
+                      stringvalue="org/sleuthkit/autopsy/enhancedgallery/resources/gallery.png"/>
+                <attr name="position" intvalue="1100"/>
+            </file>
+        </folder>
+    </folder>
+
+</filesystem>

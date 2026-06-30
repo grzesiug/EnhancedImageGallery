@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE filesystem PUBLIC
+    "-//NetBeans//DTD Filesystem 1.2//EN"
+    "http://www.netbeans.org/dtds/filesystem-1_2.dtd">
+<filesystem>
+
+    <!--
+        ══════════════════════════════════════════════════════
+        1.  TopComponent — the main gallery window
+            Registered as a singleton in the "explorer" window mode.
+        ══════════════════════════════════════════════════════
+    -->
+    <folder name="Windows2">
+        <folder name="Components">
+            <file name="EnhancedGalleryTopComponent.settings"
+                  url="EnhancedGalleryTopComponent.settings"/>
+        </folder>
+        <!-- Opens on the same side as the standard Autopsy result viewers -->
+        <folder name="Modes">
+            <folder name="output">
+                <file name="EnhancedGalleryTopComponent.wstcref"
+                      url="EnhancedGalleryTopComponent.wstcref"/>
+            </folder>
+        </folder>
+    </folder>
+
+    <!--
+        ══════════════════════════════════════════════════════
+        2.  Menu item  →  Tools  →  Enhanced Image Gallery
+        ══════════════════════════════════════════════════════
+    -->
+    <folder name="Menu">
+        <folder name="Tools">
+            <file name="OpenEnhancedGalleryAction.instance">
+                <attr name="instanceClass"
+                      stringvalue="org.sleuthkit.autopsy.enhancedgallery.ui.OpenEnhancedGalleryAction"/>
+                <attr name="position" intvalue="850"/>
+            </file>
+        </folder>
+    </folder>
+
+    <!--
+        ══════════════════════════════════════════════════════
+        3.  Toolbar button  (same action, shown in main toolbar)
+        ══════════════════════════════════════════════════════
+    -->
+    <folder name="Toolbars">
+        <folder name="File">
+            <file name="OpenEnhancedGalleryAction.shadow">
+                <attr name="originalFile"
+                      stringvalue="Actions/Tools/org-sleuthkit-autopsy-enhancedgallery-ui-OpenEnhancedGalleryAction.instance"/>
+                <attr name="position" intvalue="350"/>
+            </file>
+        </folder>
+    </folder>
+
+    <!--
+        ══════════════════════════════════════════════════════
+        4.  Options panel  →  Tools  →  Options  →  Enhanced Gallery tab
+        ══════════════════════════════════════════════════════
+    -->
+    <folder name="OptionsDialog">
+        <file name="EnhancedGallery.instance">
+            <attr name="instanceClass"
+                  stringvalue="org.sleuthkit.autopsy.enhancedgallery.options.EnhancedGalleryOptionsPanelController"/>
+            <attr name="position" intvalue="1100"/>
+        </file>
+    </folder>
+
+</filesystem>
