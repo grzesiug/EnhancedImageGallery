@@ -77,11 +77,13 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     private boolean geoOnly         = false;
     private int     thumbSize       = 110;
     private String  groupBy         = "path";
-    private String  activeGroupKey    = null;   // null = all groups
-    private String  activeDataSource  = null;   // null = all; value = display name
-    // ID-based data source map (populated at case load, used for reliable filtering)
+    private String  activeGroupKey     = null;   // null = all groups
+    private Long    activeDataSourceId = null;   // null = all; value = Content.getId() of selected data source
+    // ID-based data source map (populated at case load).
+    // Keyed by ID, not name — two data sources CAN share the same display name
+    // (e.g. the same .dd image added to the case twice), so name must never be
+    // used as a lookup key for filtering.
     private final java.util.Map<Long, String>  dsIdToName = new java.util.LinkedHashMap<>();
-    private final java.util.Map<String, Long>  dsNameToId = new java.util.LinkedHashMap<>();
     private boolean showBrokenOnly    = false;  // show only files with no thumbnail
     private volatile String searchText = null;  // case-insensitive filename substring filter
 
@@ -246,33 +248,33 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         allFiles.clear();
         visible.clear();
         // Full reset on each case load â€” clean slate
-        activeDataSource = null;
-        activeGroupKey   = null;
-        groupBy          = "path";
+        activeDataSourceId = null;
+        activeGroupKey     = null;
+        groupBy            = "path";
         selected.clear();
         selFile          = null;
         SwingUtilities.invokeLater(() -> { if (actionBar != null) actionBar.resetGroupBy(); });
 
-        // Build ID â†” name maps from all data sources (authoritative, ID-based).
-        // This is the single source of truth â€” no name prefix guessing.
+        // Build ID -> name map from all data sources (authoritative, ID-based).
+        // Two data sources CAN share the same display name (e.g. the same .dd
+        // image added to the case twice) â€” dsIdToName keeps both as separate
+        // entries since it's keyed by ID; ContextBar disambiguates duplicate
+        // names in its dropdown using the ID.
         dsIdToName.clear();
-        dsNameToId.clear();
-        final java.util.LinkedHashSet<String> allDsNames = new java.util.LinkedHashSet<>();
         try {
             for (org.sleuthkit.datamodel.Content ds :
                     currentCase.getSleuthkitCase().getDataSources()) {
                 String name = ds.getName();
                 if (name != null && !name.isBlank()) {
                     dsIdToName.put(ds.getId(), name);
-                    dsNameToId.put(name, ds.getId());
-                    allDsNames.add(name);
                 }
             }
             logger.log(Level.INFO, "Data sources: {0}", dsIdToName);
         } catch (Exception ex) {
             logger.log(Level.WARNING, "Could not load data sources by ID", ex);
         }
-        SwingUtilities.invokeLater(() -> ctxBar.setDataSources(allDsNames));
+        final java.util.Map<Long, String> dsSnapshot = new java.util.LinkedHashMap<>(dsIdToName);
+        SwingUtilities.invokeLater(() -> ctxBar.setDataSources(dsSnapshot));
 
         final org.sleuthkit.autopsy.enhancedgallery.datamodel.GalleryFileLoader loader =
                 new org.sleuthkit.autopsy.enhancedgallery.datamodel.GalleryFileLoader(stateStore);
@@ -460,7 +462,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         final int myGen = filterGen.incrementAndGet();
 
         // Snapshot filter state on EDT
-        final String  ds     = activeDataSource;
+        final Long    dsId   = activeDataSourceId;
         final String  grpKey = activeGroupKey;
         final Set<String> st = new HashSet<>(statusFilters);
         final Set<String> ty = new HashSet<>(typeFilters);
@@ -478,8 +480,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             List<MediaFile> snapshot;
             synchronized (allFiles) { snapshot = new ArrayList<>(allFiles); }
 
-            // Filter by data source using ID (reliable, no name prefix issues)
-            final Long dsId = (ds == null) ? null : dsNameToId.get(ds);
+            // Filter by data source using ID directly (reliable even when two
+            // data sources share the same display name)
             List<MediaFile> result = snapshot.stream()
                 .filter(mf -> dsId == null
                            || mf.getAbstractFile().getDataSourceObjectId() == dsId)
@@ -684,11 +686,13 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 return;
             }
 
-            // Check if this specific tag already exists in Autopsy â€” avoid duplicates
+            // Check if this tag already exists on the file in Autopsy â€” regardless
+            // of who/what applied it (gallery, another examiner, CSV import, ...).
+            // Matching only by comment used to miss externally-applied tags,
+            // which caused duplicate ContentTags with the same name.
             boolean alreadyTagged = tm.getContentTagsByContent(mf.getAbstractFile())
                     .stream()
-                    .anyMatch(ct -> ct.getName().getDisplayName().equalsIgnoreCase(tagName)
-                            && "Enhanced Gallery".equals(ct.getComment()));
+                    .anyMatch(ct -> ct.getName().getDisplayName().equalsIgnoreCase(tagName));
 
             if (!alreadyTagged) {
                 tm.addContentTag(mf.getAbstractFile(), tn, "Enhanced Gallery");
@@ -706,7 +710,12 @@ public class EnhancedGalleryTopComponent extends TopComponent {
      * Removes all "Enhanced Gallery" content tags for this file from Autopsy.
      * Must be called off EDT.
      */
-    /** Removes one specific tag by name from Autopsy (only "Enhanced Gallery" tagged ones). */
+    /**
+     * Removes one specific tag by name from Autopsy, regardless of who applied
+     * it (gallery, another examiner, CSV import, ...). Matching by comment only
+     * used to leave externally-applied tags un-removable through the gallery,
+     * which made "Remove tag" appear broken for such files.
+     */
     private void removeSingleTagFromAutopsy(MediaFile mf, String tagNameToRemove) {
         try {
             Case currentCase = Case.getCurrentCaseThrows();
@@ -714,8 +723,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             List<org.sleuthkit.datamodel.ContentTag> tags =
                     tm.getContentTagsByContent(mf.getAbstractFile());
             for (org.sleuthkit.datamodel.ContentTag ct : tags) {
-                if ("Enhanced Gallery".equals(ct.getComment())
-                        && ct.getName().getDisplayName().equalsIgnoreCase(tagNameToRemove)) {
+                if (ct.getName().getDisplayName().equalsIgnoreCase(tagNameToRemove)) {
                     tm.deleteContentTag(ct);
                 }
             }
@@ -724,6 +732,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         }
     }
 
+    /** Removes ALL tags from this file in Autopsy, regardless of who applied them. */
     private void removeTagFromAutopsy(MediaFile mf) {
         try {
             Case currentCase = Case.getCurrentCaseThrows();
@@ -731,10 +740,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             List<org.sleuthkit.datamodel.ContentTag> tags =
                     tm.getContentTagsByContent(mf.getAbstractFile());
             for (org.sleuthkit.datamodel.ContentTag ct : tags) {
-                if ("Enhanced Gallery".equals(ct.getComment())) {
-                    tm.deleteContentTag(ct);
-                    logger.log(Level.FINE, "Removed tag from Autopsy: {0}", mf.getName());
-                }
+                tm.deleteContentTag(ct);
+                logger.log(Level.FINE, "Removed tag from Autopsy: {0}", mf.getName());
             }
         } catch (Exception ex) {
             logger.log(Level.WARNING, "Could not remove tag from Autopsy for " + mf.getName(), ex);
@@ -978,8 +985,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     }
 
     private void rebuildSidebar() {
-        final String ds    = activeDataSource;
-        final Long   dsId  = (ds == null) ? null : dsNameToId.get(ds);
+        final Long   dsId  = activeDataSourceId;
         final String grpBy = groupBy;
         if (rebuildOverlay != null) rebuildOverlay.showOverlay();
         groupSidebar.captureScrollPosition();
@@ -1006,9 +1012,9 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         SwingUtilities.invokeLater(() -> thumbnailGrid.scrollToTop());
     }
 
-    public void setDataSource(String dsName) {
-        activeDataSource = dsName;  // null = all; value = canonical display name
-        activeGroupKey   = null;
+    public void setDataSource(Long dsId) {
+        activeDataSourceId = dsId;  // null = all; value = Content.getId()
+        activeGroupKey      = null;
         ctxBar.setGroupName("All files");
         if (actionBar != null) actionBar.onFilteringStart();
         applyFilters();

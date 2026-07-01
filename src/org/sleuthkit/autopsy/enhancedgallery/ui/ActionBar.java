@@ -327,11 +327,37 @@ public class ActionBar extends JPanel {
             m.add(mi);
         }
         m.addSeparator();
+        JMenuItem newTag = new JMenuItem("+ New tag...");
+        newTag.setForeground(new Color(0x15803D));
+        newTag.addActionListener(e -> promptNewTag());
+        m.add(newTag);
+        m.addSeparator();
         JMenuItem rm = new JMenuItem("✕ Remove all tags");
         rm.setForeground(new Color(0xB91C1C));
         rm.addActionListener(e -> parent.applyTag(null));
         m.add(rm);
         return m;
+    }
+
+    /** Prompts for a new tag name, validates it, and applies it to the current selection. */
+    private void promptNewTag() {
+        String input = JOptionPane.showInputDialog(this,
+                "Tag name:", "New Tag", JOptionPane.PLAIN_MESSAGE);
+        if (input == null) return; // cancelled
+        String name = input.trim();
+        if (name.isEmpty()) return;
+
+        // Case-insensitive duplicate check against the known tag list, so the
+        // user reuses the existing tag (with its original casing) instead of
+        // creating a near-duplicate that only differs by case.
+        String existing = autopsyTagNames.stream()
+                .filter(t -> t.equalsIgnoreCase(name))
+                .findFirst().orElse(null);
+        String finalName = existing != null ? existing : name;
+
+        parent.applyTag(finalName);
+        // Refresh dropdown so the new tag appears next time without reopening the gallery
+        parent.loadTagNamesFromAutopsy();
     }
 
     // ── Style helpers ─────────────────────────────────────────────────────────

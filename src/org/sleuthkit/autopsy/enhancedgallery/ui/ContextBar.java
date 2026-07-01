@@ -15,11 +15,14 @@ public class ContextBar extends JPanel {
 
     private final EnhancedGalleryTopComponent parent;
 
+    /** One entry in the data source list: (Content.getId(), display name). */
+    private record DsEntry(long id, String name) {}
+
     // Data source button + popup
     private final JButton    dsButton = new JButton("All data sources ▾");
     private final JPopupMenu dsPopup  = new JPopupMenu();
-    private String currentDs = null;
-    private final java.util.List<String> dsNames = new java.util.ArrayList<>();
+    private Long currentDsId = null; // null = "All data sources"
+    private final java.util.List<DsEntry> dsEntries = new java.util.ArrayList<>();
 
     // Row 1 components
     private final JLabel       countLabel = new JLabel("0 / 0 files");
@@ -85,15 +88,18 @@ public class ContextBar extends JPanel {
 
     public void resetGroupBy() {}
 
-    public void setDataSources(java.util.Set<String> sources) {
-        dsNames.clear();
-        if (sources != null) dsNames.addAll(sources);
-        updateButtonLabel();
-    }
-
-    public void addDataSources(java.util.Set<String> sources) {
-        if (sources == null) return;
-        for (String s : sources) if (!dsNames.contains(s)) dsNames.add(s);
+    /**
+     * Sets the list of available data sources, keyed by ID (order preserved).
+     * Two entries MAY have the same display name (e.g. the same image added
+     * twice to the case) — they remain separate, selectable entries; the
+     * popup and button label disambiguate duplicate names by appending the ID.
+     */
+    public void setDataSources(java.util.Map<Long, String> sources) {
+        dsEntries.clear();
+        if (sources != null) {
+            for (java.util.Map.Entry<Long, String> e : sources.entrySet())
+                dsEntries.add(new DsEntry(e.getKey(), e.getValue()));
+        }
         updateButtonLabel();
     }
 
@@ -117,39 +123,59 @@ public class ContextBar extends JPanel {
 
     // ── DS popup ──────────────────────────────────────────────────────────────
 
+    /**
+     * Returns the label to show for an entry: the plain display name, unless
+     * another entry shares the same name — then the ID is appended so the
+     * two (e.g. same .dd image added twice) can be told apart.
+     */
+    private String disambiguatedLabel(DsEntry e) {
+        long sameName = dsEntries.stream().filter(o -> o.name().equals(e.name())).count();
+        return sameName > 1 ? e.name() + "  (ID " + e.id() + ")" : e.name();
+    }
+
     private void rebuildDsPopup() {
         dsPopup.removeAll();
         JMenuItem allItem = new JMenuItem("All data sources");
         allItem.setFont(allItem.getFont().deriveFont(FS));
-        if (currentDs == null) allItem.setFont(allItem.getFont().deriveFont(Font.BOLD));
+        if (currentDsId == null) allItem.setFont(allItem.getFont().deriveFont(Font.BOLD));
         allItem.addActionListener(e -> selectDs(null));
         dsPopup.add(allItem);
-        if (!dsNames.isEmpty()) {
+        if (!dsEntries.isEmpty()) {
             dsPopup.addSeparator();
-            for (String ds : dsNames) {
-                JMenuItem item = new JMenuItem(ds);
+            for (DsEntry entry : dsEntries) {
+                JMenuItem item = new JMenuItem(disambiguatedLabel(entry));
                 item.setFont(item.getFont().deriveFont(FS));
-                if (ds.equals(currentDs)) item.setFont(item.getFont().deriveFont(Font.BOLD));
-                item.addActionListener(e -> selectDs(ds));
+                if (entry.id() == (currentDsId != null ? currentDsId : Long.MIN_VALUE))
+                    item.setFont(item.getFont().deriveFont(Font.BOLD));
+                item.addActionListener(e -> selectDs(entry.id()));
                 dsPopup.add(item);
             }
         }
     }
 
-    private void selectDs(String ds) {
-        currentDs = ds; updateButtonLabel(); parent.setDataSource(ds);
+    private void selectDs(Long dsId) {
+        currentDsId = dsId; updateButtonLabel(); parent.setDataSource(dsId);
     }
 
     private void updateButtonLabel() {
-        if (currentDs == null) {
+        if (currentDsId == null) {
             dsButton.setText("All data sources ▾");
             dsButton.setToolTipText("Filter gallery by data source");
-        } else {
-            String lbl = currentDs.length() > 24
-                    ? "…" + currentDs.substring(currentDs.length() - 22) : currentDs;
-            dsButton.setText(lbl + " ▾");
-            dsButton.setToolTipText(currentDs);
+            return;
         }
+        DsEntry match = dsEntries.stream()
+                .filter(e -> e.id() == currentDsId).findFirst().orElse(null);
+        if (match == null) {
+            // Selected data source no longer present (e.g. new case loaded) — reset.
+            currentDsId = null;
+            dsButton.setText("All data sources ▾");
+            dsButton.setToolTipText("Filter gallery by data source");
+            return;
+        }
+        String full = disambiguatedLabel(match);
+        String lbl = full.length() > 24 ? "…" + full.substring(full.length() - 22) : full;
+        dsButton.setText(lbl + " ▾");
+        dsButton.setToolTipText(full);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
