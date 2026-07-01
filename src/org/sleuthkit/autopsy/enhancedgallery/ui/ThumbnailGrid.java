@@ -289,8 +289,9 @@ public class ThumbnailGrid extends JScrollPane {
         private void paintCell(Graphics2D g, int idx, MediaFile mf, Rectangle r) {
             boolean isSel     = parent.getSelected().contains(idx);
             boolean isHovered = idx == hoveredIdx;
-            boolean isSeen    = mf.getReviewState() == MediaFile.ReviewState.SEEN
-                                && !mf.isTagged();
+            // Seen is independent of tags — a seen+tagged file shows both the
+            // seen styling and its tag badge.
+            boolean isSeen    = mf.getReviewState() == MediaFile.ReviewState.SEEN;
             boolean isLastSel = Integer.valueOf(idx).equals(parent.getSelFile());
 
             int x = r.x, y = r.y;

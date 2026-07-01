@@ -1162,8 +1162,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
 
     public void jumpToFirstUnseen() {
         for (int i = 0; i < visible.size(); i++) {
-            if (visible.get(i).getReviewState() == MediaFile.ReviewState.UNSEEN
-                    && !visible.get(i).isTagged()) {
+            if (visible.get(i).getReviewState() == MediaFile.ReviewState.UNSEEN) {
                 thumbnailGrid.scrollToIndex(i);
                 onFileClicked(i, false);
                 return;

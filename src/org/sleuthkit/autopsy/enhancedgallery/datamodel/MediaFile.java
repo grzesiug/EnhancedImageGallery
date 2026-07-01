@@ -16,7 +16,11 @@ public class MediaFile {
     public enum MediaType { IMAGE, VIDEO, AUDIO }
 
     // ── Review state ────────────────────────────────────────────────────────
-    public enum ReviewState { UNSEEN, SEEN, TAGGED, SKIPPED }
+    // Review state and tags are INDEPENDENT dimensions: a file can be SEEN and
+    // tagged, UNSEEN and tagged, SEEN and untagged, etc. Tagging never changes
+    // the review state (and vice-versa). "TAGGED" is intentionally NOT a review
+    // state — tag presence is tracked separately via isTagged().
+    public enum ReviewState { UNSEEN, SEEN, SKIPPED }
 
     // ── Core fields ─────────────────────────────────────────────────────────
     private final AbstractFile abstractFile;
@@ -98,10 +102,9 @@ public class MediaFile {
     public String       getTagName()         { return tagName; }
     public java.util.List<String> getAllTagNames() { return allTagNames; }
 
-    /** Sets the primary tag and review state. */
+    /** Sets the primary tag. Does NOT change review state — the two are independent. */
     public void setTagName(String t) {
-        this.tagName     = t;
-        this.reviewState = (t != null) ? ReviewState.TAGGED : ReviewState.SEEN;
+        this.tagName = t;
         // Keep allTagNames in sync
         if (t == null) {
             this.allTagNames = java.util.List.of();
@@ -112,13 +115,15 @@ public class MediaFile {
         }
     }
 
-    /** Sets all tags from Autopsy (first = primary for display). */
+    /**
+     * Sets all tags from Autopsy (first = primary for display).
+     * Does NOT change review state — tags and seen/unseen are independent.
+     */
     public void setAllTagNames(java.util.List<String> tags) {
         this.allTagNames = tags == null || tags.isEmpty()
                 ? java.util.List.of()
                 : java.util.Collections.unmodifiableList(new java.util.ArrayList<>(tags));
         this.tagName     = allTagNames.isEmpty() ? null : allTagNames.get(0);
-        this.reviewState = tagName != null ? ReviewState.TAGGED : ReviewState.SEEN;
     }
 
     public boolean isTagged() { return tagName != null; }
@@ -131,10 +136,17 @@ public class MediaFile {
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
-    /** Bucket used by status filters: tagged files always go in "tagged" bucket. */
-    public String getFilterBucket() {
-        if (tagName != null)          return "tagged";
-        return reviewState.name().toLowerCase();
+    /**
+     * Status buckets this file belongs to. Since review state and tags are
+     * independent, a file can be in MULTIPLE buckets at once — e.g. a seen,
+     * tagged file is in both "seen" and "tagged". The status filter matches
+     * if ANY selected bucket overlaps these.
+     */
+    public java.util.Set<String> getFilterBuckets() {
+        java.util.Set<String> buckets = new java.util.HashSet<>();
+        buckets.add(reviewState.name().toLowerCase()); // unseen | seen | skipped
+        if (tagName != null) buckets.add("tagged");
+        return buckets;
     }
 
     /** True if this file matches the given filter set and geo-only flag. */
@@ -143,7 +155,9 @@ public class MediaFile {
                                   boolean geoOnly,
                                   GpsCache gpsCache) {
         if (!typeSet.contains(mediaType.name().toLowerCase())) return false;
-        if (!statusBuckets.contains(getFilterBucket()))        return false;
+        // Overlapping buckets: show the file if any of its buckets is selected
+        boolean statusMatch = getFilterBuckets().stream().anyMatch(statusBuckets::contains);
+        if (!statusMatch)                                      return false;
         if (geoOnly && !gpsCache.hasGps(getId()))              return false;
         return true;
     }

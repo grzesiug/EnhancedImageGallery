@@ -106,7 +106,7 @@ public class ContextBar extends JPanel {
     public void updateProgress(List<MediaFile> all, List<MediaFile> visible) {
         long total  = all.size();
         long unseen = all.stream()
-                .filter(f -> f.getReviewState() == MediaFile.ReviewState.UNSEEN && !f.isTagged())
+                .filter(f -> f.getReviewState() == MediaFile.ReviewState.UNSEEN)
                 .count();
         long done = total - unseen;
         countLabel.setText(String.format("%,d / %,d  •  %,d unseen",

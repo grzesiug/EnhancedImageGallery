@@ -243,8 +243,9 @@ public class GroupSidebar extends JPanel {
 
         for (MediaFile mf : files) {
             allEntry[0]++;
-            boolean isUnseen = mf.getReviewState() == MediaFile.ReviewState.UNSEEN
-                    && !mf.isTagged();
+            // Unseen is independent of tags: a tagged-but-unreviewed file still
+            // counts as unseen.
+            boolean isUnseen = mf.getReviewState() == MediaFile.ReviewState.UNSEEN;
             if (isUnseen) allEntry[1]++;
 
             if (isTagGrouping) {

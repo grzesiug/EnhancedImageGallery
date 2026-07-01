@@ -318,20 +318,27 @@ public class ReviewStateStore implements AutoCloseable {
     // ── Statistics ───────────────────────────────────────────────────────────
 
     public SessionStats getStats() throws SQLException {
-        String sql =
-            "SELECT status, COUNT(*) as cnt FROM review_state GROUP BY status";
+        // Review state (unseen/seen/skipped) is independent of tags — count them
+        // separately. Tagged = any row with a non-empty tag_name, regardless of
+        // its review state.
         SessionStats stats = new SessionStats();
         try (Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(sql)) {
+             ResultSet rs = st.executeQuery(
+                 "SELECT status, COUNT(*) as cnt FROM review_state GROUP BY status")) {
             while (rs.next()) {
                 String s   = rs.getString("status");
                 int    cnt = rs.getInt("cnt");
                 switch (s) {
                     case "seen"    -> stats.seen    = cnt;
-                    case "tagged"  -> stats.tagged  = cnt;
                     case "skipped" -> stats.skipped = cnt;
+                    default        -> { /* unseen or legacy 'tagged' — not tracked here */ }
                 }
             }
+        }
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                 "SELECT COUNT(*) as cnt FROM review_state WHERE tag_name IS NOT NULL AND tag_name <> ''")) {
+            if (rs.next()) stats.tagged = rs.getInt("cnt");
         }
         return stats;
     }
