@@ -125,9 +125,21 @@ public class ActionBar extends JPanel {
         searchClearBtn.setToolTipText("Clear search");
         searchClearBtn.addActionListener(e -> { searchField.setText(""); parent.setSearchText(null); });
 
+        JButton aiSearchBtn = new JButton("AI search…", new AiSearchIcon(16));
+        aiSearchBtn.setFont(aiSearchBtn.getFont().deriveFont(12f));
+        aiSearchBtn.setIconTextGap(5);
+        aiSearchBtn.setMargin(new Insets(2, 8, 2, 8));
+        aiSearchBtn.setFocusPainted(false);
+        aiSearchBtn.setToolTipText("<html><b>Semantic search</b> (AI Image Triage).<br>"
+                + "Find images by meaning — describe what you're looking for.<br>"
+                + "Requires the AI service + a completed ingest with CLIP enabled.<br>"
+                + "Results can be further narrowed with the filename box.</html>");
+        aiSearchBtn.addActionListener(e -> promptSemanticSearch());
+
         JPanel searchPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
         searchPanel.setOpaque(false);
         searchPanel.add(lbl("🔍")); searchPanel.add(searchField); searchPanel.add(searchClearBtn);
+        searchPanel.add(aiSearchBtn);
 
         // ── Tag dropdown ──────────────────────────────────────────────────────
         JPopupMenu tagMenu = buildTagMenu();
@@ -331,12 +343,39 @@ public class ActionBar extends JPanel {
         newTag.setForeground(new Color(0x15803D));
         newTag.addActionListener(e -> promptNewTag());
         m.add(newTag);
+        JMenuItem replace = new JMenuItem("⇄ Replace selected tag(s) with...");
+        replace.addActionListener(e -> promptReplaceTag());
+        m.add(replace);
         m.addSeparator();
         JMenuItem rm = new JMenuItem("✕ Remove all tags");
         rm.setForeground(new Color(0xB91C1C));
         rm.addActionListener(e -> parent.applyTag(null));
         m.add(rm);
         return m;
+    }
+
+    /**
+     * Prompts for a target tag and replaces the tag(s) on the selected files
+     * with it. Untagged selected files are skipped (handled in TopComponent).
+     */
+    private void promptReplaceTag() {
+        javax.swing.JComboBox<String> combo =
+                new javax.swing.JComboBox<>(autopsyTagNames.toArray(new String[0]));
+        combo.setEditable(true); // allow choosing an existing tag OR typing a new one
+        int res = JOptionPane.showConfirmDialog(this, combo,
+                "Replace selected tag(s) with:",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+        if (res != JOptionPane.OK_OPTION) return;
+        Object item = combo.getEditor().getItem();
+        String name = item == null ? "" : item.toString().trim();
+        if (name.isEmpty()) return;
+
+        // Reuse existing casing if the tag already exists (avoid case-only dupes)
+        String existing = autopsyTagNames.stream()
+                .filter(t -> t.equalsIgnoreCase(name))
+                .findFirst().orElse(null);
+        parent.replaceSelectedTags(existing != null ? existing : name);
+        parent.loadTagNamesFromAutopsy();
     }
 
     /** Prompts for a new tag name, validates it, and applies it to the current selection. */
@@ -358,6 +397,39 @@ public class ActionBar extends JPanel {
         parent.applyTag(finalName);
         // Refresh dropdown so the new tag appears next time without reopening the gallery
         parent.loadTagNamesFromAutopsy();
+    }
+
+    /**
+     * Opens the semantic-search dialog: a free-text query the AI service embeds
+     * (CLIP) and matches against image embeddings. The ranked result set becomes
+     * a grid filter; the filename box can further narrow it.
+     */
+    private void promptSemanticSearch() {
+        JTextField queryField = new JTextField(28);
+        JSpinner topN = new JSpinner(new SpinnerNumberModel(50, 1, 500, 10));
+        JPanel panel = new JPanel(new BorderLayout(6, 6));
+        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        row.add(new JLabel("Max results:")); row.add(topN);
+        panel.add(new JLabel("Describe what to find:"), BorderLayout.NORTH);
+        panel.add(queryField, BorderLayout.CENTER);
+        panel.add(row, BorderLayout.SOUTH);
+
+        // Move focus to the query field as soon as the dialog is shown, so the
+        // user can start typing immediately (JOptionPane otherwise focuses OK).
+        queryField.addAncestorListener(new javax.swing.event.AncestorListener() {
+            @Override public void ancestorAdded(javax.swing.event.AncestorEvent e) {
+                queryField.requestFocusInWindow();
+            }
+            @Override public void ancestorMoved(javax.swing.event.AncestorEvent e) {}
+            @Override public void ancestorRemoved(javax.swing.event.AncestorEvent e) {}
+        });
+
+        int res = JOptionPane.showConfirmDialog(this, panel, "AI semantic search",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (res != JOptionPane.OK_OPTION) return;
+        String query = queryField.getText().trim();
+        if (query.isEmpty()) return;
+        parent.runSemanticSearch(query, (int) topN.getValue());
     }
 
     // ── Style helpers ─────────────────────────────────────────────────────────

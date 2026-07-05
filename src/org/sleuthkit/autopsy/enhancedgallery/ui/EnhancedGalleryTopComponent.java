@@ -86,6 +86,12 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     private final java.util.Map<Long, String>  dsIdToName = new java.util.LinkedHashMap<>();
     private boolean showBrokenOnly    = false;  // show only files with no thumbnail
     private volatile String searchText = null;  // case-insensitive filename substring filter
+    // Semantic (AI Image Triage) search — null when inactive (normal gallery use).
+    // semanticMatchIds: obj_ids returned by /search or /similar; semanticOrder:
+    // same ids in relevance order so the grid can be ranked by score.
+    private volatile java.util.Set<Long>  semanticMatchIds = null;
+    private volatile java.util.List<Long> semanticOrder    = null;
+    private volatile String semanticLabel = null; // e.g. 'osoba z dokumentem' or 'IMG_1234.jpg'
 
     // Selection
     private final Set<Integer>  selected  = new LinkedHashSet<>();
@@ -122,6 +128,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     private ThumbnailGrid thumbnailGrid;
     private PropertiesPanel propsPanel;
     private StatusBar       statusBar;
+    private SemanticBar     semanticBar;    // thin AI-search chip bar (hidden unless active)
     private RebuildOverlay  rebuildOverlay; // null until JFrame sets it
 
     public void setRebuildOverlay(RebuildOverlay overlay) { this.rebuildOverlay = overlay; }
@@ -148,11 +155,18 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         thumbnailGrid = new ThumbnailGrid(this);
         propsPanel    = new PropertiesPanel(this);
         statusBar     = new StatusBar(this);
+        semanticBar   = new SemanticBar(this);
 
-        // Top area: ctx + action bars stacked
+        // Top area: ctxBar on top; below it the action bar with the (hidden)
+        // semantic chip bar directly under it. Nested BorderLayouts keep the
+        // action bar full-width with its dynamic height intact.
+        JPanel actionArea = new JPanel(new BorderLayout());
+        actionArea.add(actionBar,   BorderLayout.NORTH);
+        actionArea.add(semanticBar, BorderLayout.SOUTH);
+
         JPanel topArea = new JPanel(new BorderLayout());
-        topArea.add(ctxBar,    BorderLayout.NORTH);
-        topArea.add(actionBar, BorderLayout.SOUTH);
+        topArea.add(ctxBar,     BorderLayout.NORTH);
+        topArea.add(actionArea, BorderLayout.SOUTH);
 
         // Center: sidebar + grid + props
         JPanel centerArea = new JPanel(new BorderLayout());
@@ -314,6 +328,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                     rebuildSidebarDebounced();
                     // Build MD5 index in background for propagation feature
                     buildMd5Index();
+                    // Load GPS coordinates from EXIF artifacts (enables GPS-only filter + map)
+                    loadGpsDataAsync();
                     // Sync tags from Autopsy + load tag names for dropdown
                     loaderPool.submit(EnhancedGalleryTopComponent.this::syncTagsFromAutopsy);
                     loadTagNamesFromAutopsy();
@@ -368,6 +384,58 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         }
         return org.sleuthkit.autopsy.enhancedgallery.datamodel
                 .GroupKeyHelper.keyOf(mf, grpBy).equals(grpKey);
+    }
+
+    /**
+     * Populates {@link #gpsCache} from EXIF blackboard artifacts on a background
+     * thread. Without this the GPS-only filter and map badges never light up
+     * (the active loader doesn't read GPS). Reads TSK_METADATA_EXIF artifacts and
+     * their TSK_GEO_LATITUDE / TSK_GEO_LONGITUDE attributes, keyed by the tagged
+     * file's obj_id.
+     */
+    private void loadGpsDataAsync() {
+        loaderPool.submit(() -> {
+            try {
+                org.sleuthkit.datamodel.SleuthkitCase db =
+                        Case.getCurrentCaseThrows().getSleuthkitCase();
+                int latId = org.sleuthkit.datamodel.BlackboardAttribute
+                        .ATTRIBUTE_TYPE.TSK_GEO_LATITUDE.getTypeID();
+                int lonId = org.sleuthkit.datamodel.BlackboardAttribute
+                        .ATTRIBUTE_TYPE.TSK_GEO_LONGITUDE.getTypeID();
+                int count = 0;
+                for (org.sleuthkit.datamodel.BlackboardArtifact art :
+                        db.getBlackboardArtifacts(
+                            org.sleuthkit.datamodel.BlackboardArtifact.ARTIFACT_TYPE.TSK_METADATA_EXIF)) {
+                    try {
+                        Double lat = null, lon = null;
+                        for (org.sleuthkit.datamodel.BlackboardAttribute a : art.getAttributes()) {
+                            int id = a.getAttributeType().getTypeID();
+                            if (id == latId) lat = a.getValueDouble();
+                            else if (id == lonId) lon = a.getValueDouble();
+                            else {
+                                // Name-based fallback (mirrors PropertiesPanel) for
+                                // cases where GPS is stored under non-standard attrs
+                                String nl = a.getAttributeType().getTypeName().toLowerCase();
+                                if (lat == null && nl.contains("latit")) lat = a.getValueDouble();
+                                else if (lon == null && nl.contains("longit")) lon = a.getValueDouble();
+                            }
+                        }
+                        if (lat != null && lon != null && (lat != 0.0 || lon != 0.0)) {
+                            gpsCache.put(art.getObjectID(), lat, lon, null);
+                            count++;
+                        }
+                    } catch (Exception ignored) { /* skip individual artifact */ }
+                }
+                final int total = count;
+                logger.log(Level.INFO, "GPS cache loaded: {0} entries", total);
+                SwingUtilities.invokeLater(() -> {
+                    thumbnailGrid.repaint();          // GPS badges
+                    if (geoOnly) applyFilters();      // refresh if GPS filter already on
+                });
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, "Could not load GPS data", ex);
+            }
+        });
     }
 
     /** Builds MD5 â†’ files index asynchronously in filterPool. */
@@ -472,6 +540,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         final GpsCache gps   = gpsCache;
         final String  search = (searchText == null || searchText.isBlank())
                 ? null : searchText.trim().toLowerCase();
+        final java.util.Set<Long>  semIds   = semanticMatchIds; // null = no AI filter
+        final java.util.List<Long> semOrder = semanticOrder;
 
         filterPool.submit(() -> {
             // If a newer request came in, skip this one
@@ -489,7 +559,18 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 .filter(mf -> mf.matchesFilters(st, ty, geo, gps))
                 .filter(mf -> !broken || mf.isThumbnailFailed())
                 .filter(mf -> search == null || mf.getName().toLowerCase().contains(search))
+                // Semantic filter — no-op unless an AI search is active (semIds != null)
+                .filter(mf -> semIds == null || semIds.contains(mf.getId()))
                 .collect(java.util.stream.Collectors.toList());
+
+            // When an AI search is active, order the grid by relevance (score rank)
+            // instead of the default allFiles order.
+            if (semOrder != null) {
+                java.util.Map<Long, Integer> rank = new java.util.HashMap<>();
+                for (int i = 0; i < semOrder.size(); i++) rank.put(semOrder.get(i), i);
+                result.sort(java.util.Comparator.comparingInt(
+                        mf -> rank.getOrDefault(mf.getId(), Integer.MAX_VALUE)));
+            }
 
             // Check again â€” might have been superseded during collect
             if (filterGen.get() != myGen) return;
@@ -616,18 +697,9 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 }
             }
 
-            // Save + Autopsy sync
+            // Save + Autopsy sync (single batched pass — see applyTagBatchToAutopsy)
             if (stateStore != null) stateStore.saveBatch(expanded);
-            for (MediaFile mf : expanded) {
-                if (finalTagName == null) {
-                    removeTagFromAutopsy(mf);
-                } else {
-                    boolean nowHasTag = mf.getAllTagNames().stream()
-                            .anyMatch(t -> t.equalsIgnoreCase(finalTagName));
-                    if (nowHasTag) syncTagToAutopsy(mf, finalTagName);
-                    else removeSingleTagFromAutopsy(mf, finalTagName);
-                }
-            }
+            applyTagBatchToAutopsy(expanded, finalTagName);
 
             SwingUtilities.invokeLater(() -> {
                 thumbnailGrid.repaint();
@@ -642,110 +714,212 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     }
 
     /**
-     * Writes a tag to Autopsy's TagsManager (Blackboard).
-     * Creates the tag name if it doesn't exist yet.
+     * Resolves an existing Autopsy TagName by display name (case-insensitive),
+     * creating it if absent. Returns null if it could not be found or created.
      * Must be called off EDT.
      */
-    private void syncTagToAutopsy(MediaFile mf, String tagName) {
+    private org.sleuthkit.datamodel.TagName resolveOrCreateTagName(
+            org.sleuthkit.autopsy.casemodule.services.TagsManager tm, String tagName) throws Exception {
+        for (org.sleuthkit.datamodel.TagName t : tm.getAllTagNames()) {
+            if (t.getDisplayName().equalsIgnoreCase(tagName)) return t;
+        }
+        // Not found — create it (API signature varies across Autopsy versions)
+        for (java.lang.reflect.Method m : tm.getClass().getMethods()) {
+            String mn = m.getName();
+            Class<?>[] pt = m.getParameterTypes();
+            if ((mn.equals("addOrUpdateTagName") || mn.equals("addTagName"))
+                    && pt.length >= 1 && pt[0] == String.class) {
+                Object[] args = new Object[pt.length];
+                args[0] = tagName;
+                if (pt.length > 1) args[1] = "";
+                if (pt.length > 2 && pt[2].isEnum()) {
+                    for (Object c : pt[2].getEnumConstants())
+                        if ("NONE".equals(c.toString())) { args[2] = c; break; }
+                }
+                try {
+                    return (org.sleuthkit.datamodel.TagName) m.invoke(tm, args);
+                } catch (Exception ex2) {
+                    logger.log(Level.FINE, "Could not create tag name: " + tagName, ex2);
+                }
+                break;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Applies a tag change to a whole batch of files in Autopsy in one pass.
+     *
+     * Performance: the previous per-file implementation issued one
+     * {@code getContentTagsByContent} query for EVERY file — thousands of DB
+     * round-trips when operating on a large group. Here we fetch ALL content
+     * tags once via {@code getAllContentTags()} and index them by obj_id, so
+     * the find side is a single query. (Autopsy's TagsManager has no bulk
+     * add/delete, so the individual add/delete calls — and their per-item
+     * tree-refresh events — remain one at a time; that part is an API limit.)
+     *
+     * @param files    files whose in-memory model tag state has ALREADY been updated
+     * @param tagName  the tag being toggled, or {@code null} to remove all tags
+     */
+    private void applyTagBatchToAutopsy(List<MediaFile> files, String tagName) {
         try {
             Case currentCase = Case.getCurrentCaseThrows();
             var tm = currentCase.getServices().getTagsManager();
 
-            // Find existing tag name
-            org.sleuthkit.datamodel.TagName tn = null;
-            for (org.sleuthkit.datamodel.TagName t : tm.getAllTagNames()) {
-                if (t.getDisplayName().equalsIgnoreCase(tagName)) { tn = t; break; }
+            // Index every existing content tag by content obj_id — ONE query total
+            java.util.Map<Long, java.util.List<org.sleuthkit.datamodel.ContentTag>> byObjId =
+                    new java.util.HashMap<>();
+            for (org.sleuthkit.datamodel.ContentTag ct : tm.getAllContentTags()) {
+                byObjId.computeIfAbsent(ct.getContent().getId(),
+                        k -> new java.util.ArrayList<>()).add(ct);
             }
 
-            // Create if not found â€” try multiple API method signatures
-            if (tn == null) {
-                for (java.lang.reflect.Method m : tm.getClass().getMethods()) {
-                    String mn = m.getName();
-                    Class<?>[] pt = m.getParameterTypes();
-                    if ((mn.equals("addOrUpdateTagName") || mn.equals("addTagName"))
-                            && pt.length >= 1 && pt[0] == String.class) {
-                        Object[] args = new Object[pt.length];
-                        args[0] = tagName;
-                        if (pt.length > 1) args[1] = "";
-                        if (pt.length > 2 && pt[2].isEnum()) {
-                            for (Object c : pt[2].getEnumConstants())
-                                if ("NONE".equals(c.toString())) { args[2] = c; break; }
+            // Resolve/create the TagName once (only needed on the add path)
+            org.sleuthkit.datamodel.TagName tn =
+                    (tagName != null) ? resolveOrCreateTagName(tm, tagName) : null;
+            if (tagName != null && tn == null) {
+                logger.log(Level.WARNING, "Tag ''{0}'' not found and could not be created", tagName);
+            }
+
+            int added = 0, removed = 0;
+            for (MediaFile mf : files) {
+                java.util.List<org.sleuthkit.datamodel.ContentTag> existing =
+                        byObjId.getOrDefault(mf.getId(), java.util.List.of());
+                if (tagName == null) {
+                    // Remove ALL tags from this file
+                    for (org.sleuthkit.datamodel.ContentTag ct : existing) {
+                        tm.deleteContentTag(ct); removed++;
+                    }
+                } else {
+                    boolean nowHasTag = mf.getAllTagNames().stream()
+                            .anyMatch(t -> t.equalsIgnoreCase(tagName));
+                    boolean inAutopsy = existing.stream()
+                            .anyMatch(ct -> ct.getName().getDisplayName().equalsIgnoreCase(tagName));
+                    if (nowHasTag && !inAutopsy && tn != null) {
+                        tm.addContentTag(mf.getAbstractFile(), tn, "Enhanced Gallery"); added++;
+                    } else if (!nowHasTag && inAutopsy) {
+                        for (org.sleuthkit.datamodel.ContentTag ct : existing) {
+                            if (ct.getName().getDisplayName().equalsIgnoreCase(tagName)) {
+                                tm.deleteContentTag(ct); removed++;
+                            }
                         }
-                        try {
-                            tn = (org.sleuthkit.datamodel.TagName) m.invoke(tm, args);
-                        } catch (Exception ex2) {
-                            logger.log(Level.FINE, "Could not create tag name: " + tagName, ex2);
-                        }
-                        break;
                     }
                 }
             }
-
-            if (tn == null) {
-                logger.log(Level.WARNING, "Tag ''{0}'' not found and could not be created", tagName);
-                return;
-            }
-
-            // Check if this tag already exists on the file in Autopsy â€” regardless
-            // of who/what applied it (gallery, another examiner, CSV import, ...).
-            // Matching only by comment used to miss externally-applied tags,
-            // which caused duplicate ContentTags with the same name.
-            boolean alreadyTagged = tm.getContentTagsByContent(mf.getAbstractFile())
-                    .stream()
-                    .anyMatch(ct -> ct.getName().getDisplayName().equalsIgnoreCase(tagName));
-
-            if (!alreadyTagged) {
-                tm.addContentTag(mf.getAbstractFile(), tn, "Enhanced Gallery");
-                logger.log(Level.FINE, "Added tag to Autopsy: {0} â†’ {1}",
-                        new Object[]{mf.getName(), tagName});
-            }
-            logger.log(Level.FINE, "Tagged in Autopsy: {0} â†’ {1}", new Object[]{mf.getName(), tagName});
-
+            logger.log(Level.INFO, "Autopsy tag sync: {0} added, {1} removed ({2} files)",
+                    new Object[]{added, removed, files.size()});
         } catch (Exception ex) {
-            logger.log(Level.WARNING, "Could not sync tag to Autopsy for " + mf.getName(), ex);
+            logger.log(Level.WARNING, "Batch tag sync to Autopsy failed", ex);
         }
     }
 
     /**
-     * Removes all "Enhanced Gallery" content tags for this file from Autopsy.
-     * Must be called off EDT.
+     * Makes Autopsy's content tags match each file's in-memory model tag set,
+     * in one batched pass (single getAllContentTags query). For every file:
+     * deletes Autopsy tags not in the model, adds model tags missing in Autopsy.
+     * Handles add / remove / replace uniformly. Must be called off EDT.
      */
-    /**
-     * Removes one specific tag by name from Autopsy, regardless of who applied
-     * it (gallery, another examiner, CSV import, ...). Matching by comment only
-     * used to leave externally-applied tags un-removable through the gallery,
-     * which made "Remove tag" appear broken for such files.
-     */
-    private void removeSingleTagFromAutopsy(MediaFile mf, String tagNameToRemove) {
+    private void reconcileTagsToAutopsy(List<MediaFile> files) {
         try {
             Case currentCase = Case.getCurrentCaseThrows();
             var tm = currentCase.getServices().getTagsManager();
-            List<org.sleuthkit.datamodel.ContentTag> tags =
-                    tm.getContentTagsByContent(mf.getAbstractFile());
-            for (org.sleuthkit.datamodel.ContentTag ct : tags) {
-                if (ct.getName().getDisplayName().equalsIgnoreCase(tagNameToRemove)) {
-                    tm.deleteContentTag(ct);
+
+            java.util.Map<Long, java.util.List<org.sleuthkit.datamodel.ContentTag>> byObjId =
+                    new java.util.HashMap<>();
+            for (org.sleuthkit.datamodel.ContentTag ct : tm.getAllContentTags()) {
+                byObjId.computeIfAbsent(ct.getContent().getId(),
+                        k -> new java.util.ArrayList<>()).add(ct);
+            }
+
+            java.util.Map<String, org.sleuthkit.datamodel.TagName> tagNameCache =
+                    new java.util.HashMap<>(); // lowercase name -> TagName
+            int added = 0, removed = 0;
+            for (MediaFile mf : files) {
+                java.util.Set<String> desired = new java.util.HashSet<>();
+                for (String t : mf.getAllTagNames()) desired.add(t.toLowerCase());
+
+                java.util.List<org.sleuthkit.datamodel.ContentTag> actual =
+                        byObjId.getOrDefault(mf.getId(), java.util.List.of());
+                java.util.Set<String> actualNames = new java.util.HashSet<>();
+                for (org.sleuthkit.datamodel.ContentTag ct : actual) {
+                    String dn = ct.getName().getDisplayName();
+                    actualNames.add(dn.toLowerCase());
+                    if (!desired.contains(dn.toLowerCase())) { tm.deleteContentTag(ct); removed++; }
+                }
+                for (String t : mf.getAllTagNames()) {
+                    if (!actualNames.contains(t.toLowerCase())) {
+                        org.sleuthkit.datamodel.TagName tn = tagNameCache.get(t.toLowerCase());
+                        if (tn == null) {
+                            tn = resolveOrCreateTagName(tm, t);
+                            if (tn != null) tagNameCache.put(t.toLowerCase(), tn);
+                        }
+                        if (tn != null) {
+                            tm.addContentTag(mf.getAbstractFile(), tn, "Enhanced Gallery"); added++;
+                        }
+                    }
                 }
             }
+            logger.log(Level.INFO, "Autopsy tag reconcile: {0} added, {1} removed ({2} files)",
+                    new Object[]{added, removed, files.size()});
         } catch (Exception ex) {
-            logger.log(Level.WARNING, "Could not remove single tag from Autopsy", ex);
+            logger.log(Level.WARNING, "Reconcile tags to Autopsy failed", ex);
         }
     }
 
-    /** Removes ALL tags from this file in Autopsy, regardless of who applied them. */
-    private void removeTagFromAutopsy(MediaFile mf) {
-        try {
-            Case currentCase = Case.getCurrentCaseThrows();
-            var tm = currentCase.getServices().getTagsManager();
-            List<org.sleuthkit.datamodel.ContentTag> tags =
-                    tm.getContentTagsByContent(mf.getAbstractFile());
-            for (org.sleuthkit.datamodel.ContentTag ct : tags) {
-                tm.deleteContentTag(ct);
-                logger.log(Level.FINE, "Removed tag from Autopsy: {0}", mf.getName());
-            }
-        } catch (Exception ex) {
-            logger.log(Level.WARNING, "Could not remove tag from Autopsy for " + mf.getName(), ex);
+    /**
+     * Replaces the tag(s) on the selected files with a single new tag.
+     * Files with no tag are skipped (this is a replace, not an add). Propagates
+     * to MD5 duplicates, persists, and reconciles Autopsy tags.
+     */
+    public void replaceSelectedTags(String newTag) {
+        if (newTag == null || newTag.isBlank()) return;
+        final String finalNew = newTag.trim();
+
+        List<Integer> targets = selected.isEmpty()
+                ? (selFile != null ? List.of(selFile) : List.of())
+                : new ArrayList<>(selected);
+
+        List<MediaFile> primary = new ArrayList<>();
+        for (int idx : targets) {
+            if (idx < 0 || idx >= visible.size()) continue;
+            MediaFile mf = visible.get(idx);
+            if (!mf.isTagged()) continue; // replace only affects files that already have a tag
+            mf.setAllTagNames(List.of(finalNew));
+            primary.add(mf);
         }
+
+        if (primary.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "None of the selected files have a tag to replace.",
+                    "Replace tag", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+
+        thumbnailGrid.repaint();
+        selected.clear();
+        selFile = null;
+        statusBar.startIndeterminate("Replacing tags + propagating MD5 duplicates...");
+        if (actionBar != null) actionBar.onFilteringStart();
+
+        final List<MediaFile> finalPrimary = primary;
+        loaderPool.submit(() -> {
+            List<MediaFile> expanded = expandByMd5(finalPrimary);
+            for (MediaFile dup : expanded) {
+                if (!finalPrimary.contains(dup)) dup.setAllTagNames(List.of(finalNew));
+            }
+            if (stateStore != null) stateStore.saveBatch(expanded);
+            reconcileTagsToAutopsy(expanded);
+
+            final int count = expanded.size();
+            SwingUtilities.invokeLater(() -> {
+                statusBar.hideSpinner();
+                thumbnailGrid.repaint();
+                applyFilters();
+                rebuildSidebarDebounced();
+                logger.log(Level.INFO, "Replaced tag on {0} file(s) with ''{1}'' (incl. MD5 duplicates)",
+                        new Object[]{count, finalNew});
+            });
+        });
     }
 
     /**
@@ -795,7 +969,15 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         }
     }
 
-    /** Loads tag names from Autopsy and updates the ActionBar dropdown. */
+    // Live list of Autopsy tag display names — shared by the Tag ▾ dropdown and
+    // the thumbnail right-click menu so both show the same, current tags.
+    private volatile java.util.List<String> autopsyTagNames = java.util.List.of(
+            "Bookmark", "Notable item", "Follow up", "Evidence", "OK / Irrelevant", "Needs review");
+
+    /** Current Autopsy tag names (defaults until loaded). Never null. */
+    public java.util.List<String> getTagNames() { return autopsyTagNames; }
+
+    /** Loads tag names from Autopsy and updates the ActionBar dropdown + context menu. */
     public void loadTagNamesFromAutopsy() {
         loaderPool.submit(() -> {
             try {
@@ -806,6 +988,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                     names.add(t.getDisplayName());
                 }
                 if (!names.isEmpty()) {
+                    autopsyTagNames = java.util.List.copyOf(names);
                     SwingUtilities.invokeLater(() -> actionBar.updateTagNames(names));
                 }
             } catch (Exception ex) {
@@ -904,6 +1087,137 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     public void setSearchText(String text) {
         searchText = text;
         applyFilters();
+    }
+
+    // ── Semantic search (AI Image Triage) ──────────────────────────────────────
+
+    /**
+     * Returns the AIImageTriage FAISS index dir for the current case, or null.
+     * Must match exactly the path the ingest module writes to:
+     * {@code new File(Case.getModuleDirectory(), "AIImageTriage")}.
+     */
+    private String currentIndexDir() {
+        try {
+            String moduleOutput = Case.getCurrentCaseThrows().getModuleDirectory();
+            return new java.io.File(moduleOutput, "AIImageTriage").getAbsolutePath();
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /** True while an AI (semantic/similar) result set is filtering the grid. */
+    public boolean isSemanticActive() { return semanticMatchIds != null; }
+    public String  getSemanticLabel() { return semanticLabel; }
+    public int     getSemanticCount() {
+        return semanticMatchIds == null ? 0 : semanticMatchIds.size();
+    }
+
+    /** Clears the semantic filter and restores the normal (non-AI) view. */
+    public void clearSemanticSearch() {
+        semanticMatchIds = null;
+        semanticOrder    = null;
+        semanticLabel    = null;
+        if (semanticBar != null) semanticBar.hideBar();
+        applyFilters();
+    }
+
+    private void applySemanticHits(java.util.List<org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.Hit> hits,
+                                   String label) {
+        java.util.LinkedHashSet<Long> ids = new java.util.LinkedHashSet<>();
+        java.util.List<Long> order = new java.util.ArrayList<>();
+        for (var h : hits) { if (ids.add(h.fileId())) order.add(h.fileId()); }
+        semanticMatchIds = ids;
+        semanticOrder    = order;
+        semanticLabel    = label;
+        if (semanticBar != null) semanticBar.showBar(label, ids.size());
+        applyFilters();
+    }
+
+    /**
+     * Runs a semantic text search via the AI service (off EDT), then filters the
+     * grid to the ranked results. Safe no-op path when the service/index is
+     * unavailable — shows a message and leaves the normal view untouched.
+     */
+    public void runSemanticSearch(String query, int topN) {
+        if (query == null || query.isBlank()) return;
+        final String idxDir = currentIndexDir();
+        if (idxDir == null) {
+            JOptionPane.showMessageDialog(this, "No case is open.",
+                    "AI search", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        statusBar.startIndeterminate("Starting AI service / searching...");
+        loaderPool.submit(() -> {
+            try {
+                var svc = org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.getInstance();
+                svc.ensureRunning();
+                var hits = svc.search(query.trim(), idxDir, topN);
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    if (hits.isEmpty()) {
+                        JOptionPane.showMessageDialog(this,
+                                "No matches for: " + query,
+                                "AI search", JOptionPane.INFORMATION_MESSAGE);
+                        return;
+                    }
+                    applySemanticHits(hits, query.trim());
+                });
+            } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.ClipDisabledException ce) {
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    JOptionPane.showMessageDialog(this,
+                            "Text search requires CLIP enabled in the AI service config\n"
+                            + "(config/clip_categories.json → \"enabled\": true) and the model downloaded.\n\n"
+                            + "\"Find similar\" (right-click a thumbnail) works without CLIP.",
+                            "CLIP not enabled", JOptionPane.WARNING_MESSAGE);
+                });
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, "Semantic search failed", ex);
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    JOptionPane.showMessageDialog(this,
+                            "AI search unavailable:\n" + ex.getMessage(),
+                            "AI search", JOptionPane.WARNING_MESSAGE);
+                });
+            }
+        });
+    }
+
+    /** Runs a visual-similarity lookup for the file at the given visible index. */
+    public void runFindSimilar(int visibleIdx) {
+        if (visibleIdx < 0 || visibleIdx >= visible.size()) return;
+        final MediaFile mf = visible.get(visibleIdx);
+        final long fileId  = mf.getId();
+        final String label = mf.getName();
+        final String idxDir = currentIndexDir();
+        if (idxDir == null) return;
+
+        statusBar.startIndeterminate("Starting AI service / finding similar...");
+        loaderPool.submit(() -> {
+            try {
+                var svc = org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.getInstance();
+                svc.ensureRunning();
+                var hits = svc.similar(fileId, idxDir, 50);
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    if (hits.isEmpty()) {
+                        JOptionPane.showMessageDialog(this,
+                                "No similar images found (is this file in the AI index?).",
+                                "Find similar", JOptionPane.INFORMATION_MESSAGE);
+                        return;
+                    }
+                    applySemanticHits(hits, "similar to " + label);
+                });
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, "Find-similar failed", ex);
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    JOptionPane.showMessageDialog(this,
+                            "Find similar unavailable:\n" + ex.getMessage(),
+                            "Find similar", JOptionPane.WARNING_MESSAGE);
+                });
+            }
+        });
     }
     public void setThumbSize(int px) {
         thumbSize = px;

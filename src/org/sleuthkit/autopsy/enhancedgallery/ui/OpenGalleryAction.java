@@ -71,6 +71,12 @@ public class OpenGalleryAction implements ActionListener {
         galleryFrame.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosed(WindowEvent we) {
+                // Stop the AI search service if THIS gallery launched it (no-op
+                // if it was never used or is owned by an active ingest)
+                try {
+                    org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService
+                            .getInstance().stopIfOwned();
+                } catch (Exception ignored) {}
                 // Return TC to NB so it can be opened again later
                 galleryFrame = null;
             }

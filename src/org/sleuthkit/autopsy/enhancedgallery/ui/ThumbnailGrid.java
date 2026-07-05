@@ -157,9 +157,13 @@ public class ThumbnailGrid extends JScrollPane {
             MouseAdapter ma = new MouseAdapter() {
                 @Override public void mouseMoved(MouseEvent e)    { onMove(e); }
                 @Override public void mouseExited(MouseEvent e)   { hoveredIdx=-1; repaint(); }
+                @Override public void mousePressed(MouseEvent e)  { if (maybePopup(e)) return; }
                 // mouseReleased always fires regardless of mouse movement between press/release.
                 // No drag check — scrolling is via mouse wheel only, not drag.
-                @Override public void mouseReleased(MouseEvent e) { onClick(e); }
+                @Override public void mouseReleased(MouseEvent e) {
+                    if (maybePopup(e)) return; // right-click handled as context menu, not select
+                    onClick(e);
+                }
             };
             addMouseListener(ma);
             addMouseMotionListener(ma);
@@ -202,6 +206,55 @@ public class ThumbnailGrid extends JScrollPane {
                 hoveredIdx = idx;
                 repaint();
             }
+        }
+
+        /** Shows the tile context menu on a right-click (popup trigger). Returns true if handled. */
+        private boolean maybePopup(MouseEvent e) {
+            if (!e.isPopupTrigger()) return false;
+            int idx = indexAt(e.getX(), e.getY());
+            if (idx < 0) return true;
+            // Keep an existing multi-selection if the clicked file is part of it
+            // (so tag actions apply to all). Otherwise select just this file.
+            if (!parent.getSelected().contains(idx)) {
+                parent.onFileClicked(idx, false);
+            }
+            showContextMenu(idx, e.getPoint());
+            return true;
+        }
+
+        private void showContextMenu(int idx, Point p) {
+            JPopupMenu m = new JPopupMenu();
+            boolean multi = parent.getSelected().size() > 1;
+
+            JMenuItem similar = new JMenuItem("Find similar images", new AiSearchIcon(14));
+            similar.setToolTipText(multi
+                    ? "Select a single image to find similar ones"
+                    : "Find visually similar images using the AI Image Triage index");
+            similar.setEnabled(!multi); // single-file action
+            similar.addActionListener(ev -> parent.runFindSimilar(idx));
+            m.add(similar);
+
+            JMenuItem open = new JMenuItem("Open externally");
+            open.setEnabled(!multi); // single-file action
+            open.addActionListener(ev -> parent.openFileExternally(idx));
+            m.add(open);
+
+            m.addSeparator();
+            JMenu tagMenu = new JMenu("Tag");
+            // Use the same live Autopsy tag list as the top Tag ▾ button
+            for (String tagName : parent.getTagNames()) {
+                JMenuItem ti = new JMenuItem(tagName);
+                final String tag = tagName;
+                ti.addActionListener(ev -> parent.applyTag(tag));
+                tagMenu.add(ti);
+            }
+            tagMenu.addSeparator();
+            JMenuItem removeAll = new JMenuItem("✕ Remove all tags");
+            removeAll.addActionListener(ev -> parent.applyTag(null));
+            tagMenu.add(removeAll);
+            m.add(tagMenu);
+
+            m.show(this, p.x, p.y);
         }
 
         private void onClick(MouseEvent e) {
@@ -331,6 +384,13 @@ public class ThumbnailGrid extends JScrollPane {
                 drawCenteredString(g, "loading...", x + imgW/2, y + imgH*3/4);
             }
 
+            // ── Frame around the whole preview cell ───────────────────────────
+            // Always drawn so the extent of each tile is visible even when the
+            // image is narrower than the cell (or is mostly white).
+            g.setColor(new Color(0x606060));
+            g.setStroke(new BasicStroke(1));
+            g.drawRect(x, y, imgW - 1, imgH - 1);
+
             // ── Selected: orange border for all selected files ───────────────
             if (isSel) {
                 Color borderColor = new Color(0xFF8C00); // orange for all
@@ -367,11 +427,13 @@ public class ThumbnailGrid extends JScrollPane {
                 int step     = badgeH + gap;
                 int maxBadges = Math.max(1, (imgH - 20) / step);
 
+                // Cap tag badges to ~2/3 of the tile so they stay inside the cell
+                // and leave room for the extension badge (top-left).
+                int maxTagW = Math.max(20, (imgW * 2) / 3);
                 int badgeY = y + 4;
                 for (int ti = 0; ti < Math.min(tags.size(), maxBadges); ti++) {
                     String t = tags.get(ti);
-                    String label = t.split("[ /]")[0]; // first word
-                    paintBadge(g, label, tagColor(t), x + imgW - 3, badgeY, true);
+                    paintBadge(g, tagBadgeLabel(t), tagColor(t), x + imgW - 3, badgeY, true, maxTagW);
                     badgeY += step;
                 }
                 if (tags.size() > maxBadges) {
@@ -442,11 +504,21 @@ public class ThumbnailGrid extends JScrollPane {
         }
 
         private void paintBadge(Graphics2D g, String text, Color bg, int x, int y) {
-            paintBadge(g, text, bg, x, y, false);
+            paintBadge(g, text, bg, x, y, false, Integer.MAX_VALUE);
         }
 
         private void paintBadge(Graphics2D g, String text, Color bg,
                                  int x, int y, boolean rightAlign) {
+            paintBadge(g, text, bg, x, y, rightAlign, Integer.MAX_VALUE);
+        }
+
+        /**
+         * Draws a badge. {@code maxW} caps the total badge width — longer text is
+         * truncated with an ellipsis so tag badges stay inside their own tile and
+         * never spill over neighbouring cells or the extension label.
+         */
+        private void paintBadge(Graphics2D g, String text, Color bg,
+                                 int x, int y, boolean rightAlign, int maxW) {
             // Badge font scales with thumb size: 8pt at 60px, ~14pt at 190px
             int fontSize = Math.max(8, Math.min(14, thumbSize / 10));
             int padH = fontSize / 2;
@@ -455,12 +527,14 @@ public class ThumbnailGrid extends JScrollPane {
 
             g.setFont(new Font(Font.SANS_SERIF, Font.BOLD, fontSize));
             FontMetrics fm = g.getFontMetrics();
-            int tw = fm.stringWidth(text) + padH * 2;
+            String shown = (maxW == Integer.MAX_VALUE)
+                    ? text : clipText(text, fm, Math.max(4, maxW - padH * 2));
+            int tw = fm.stringWidth(shown) + padH * 2;
             int bx = rightAlign ? x - tw : x;
             g.setColor(bg);
             g.fillRoundRect(bx, y, tw, badgeH, 4, 4);
             g.setColor(Color.WHITE);
-            g.drawString(text, bx + padH, y + fontSize + padV);
+            g.drawString(shown, bx + padH, y + fontSize + padV);
         }
 
         /** Draws a small film-strip icon. ix/iy = top-left corner of the icon. */
@@ -511,19 +585,45 @@ public class ThumbnailGrid extends JScrollPane {
             };
         }
 
+        /**
+         * Badge text for a tag. For prefixed classification tags like "ai: nsfw"
+         * shows the value after the colon ("nsfw"); otherwise the tag itself.
+         * Kept compact by stopping at a slash ("OK / Irrelevant" → "OK").
+         */
+        private String tagBadgeLabel(String tag) {
+            if (tag == null || tag.isBlank()) return "";
+            String s = tag;
+            int colon = s.indexOf(':');
+            if (colon >= 0 && colon < s.length() - 1) s = s.substring(colon + 1).trim();
+            int slash = s.indexOf('/');
+            if (slash > 0) s = s.substring(0, slash).trim();
+            return s.isEmpty() ? tag : s;
+        }
+
+        /** Normalized key for colour lookup: value after a colon, spaces→underscore. */
+        private String tagKey(String tag) {
+            String s = tag.toLowerCase();
+            int colon = s.indexOf(':');
+            if (colon >= 0 && colon < s.length() - 1) s = s.substring(colon + 1);
+            return s.trim().replace(" ", "_").split("/")[0].trim();
+        }
+
         private Color tagColor(String tag) {
             if (tag == null) return Color.GRAY;
-            return switch(tag.toLowerCase().replace(" ","_").split("/")[0].trim()) {
+            return switch (tagKey(tag)) {
                 case "bookmark"          -> new Color(0x378ADD);
-                case "notable_item"      -> new Color(0xE24B4A);
-                case "notable"           -> new Color(0xE24B4A);
+                case "notable_item", "notable" -> new Color(0xE24B4A);
                 case "follow_up"         -> new Color(0xEF9F27);
                 case "evidence"          -> new Color(0x0f6e56);
                 case "ok"                -> new Color(0x888780);
-                case "needs_review"      -> new Color(0x854f0b);
-                case "child_exploitation"-> new Color(0xA32D2D);
-                case "child"             -> new Color(0xA32D2D);
-                default                  -> new Color(0x534AB7);
+                case "needs_review", "review" -> new Color(0x854f0b);
+                case "child_exploitation", "child" -> new Color(0xA32D2D);
+                // AI Image Triage classification values
+                case "nsfw", "unsafe"    -> new Color(0xB91C1C);
+                case "sfw", "safe"       -> new Color(0x15803D);
+                case "document", "id_card" -> new Color(0x0369A1);
+                // Distinct default so custom tags never match the extension badge colour
+                default                  -> new Color(0xC026D3);
             };
         }
     }

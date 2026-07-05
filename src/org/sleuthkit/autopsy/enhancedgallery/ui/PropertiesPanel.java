@@ -121,7 +121,10 @@ public class PropertiesPanel extends JPanel {
         mapsBtn.setVisible(false);
         mapsBtn.addActionListener(e -> openGoogleMaps());
 
-        JPanel btns = new JPanel(new FlowLayout(FlowLayout.CENTER, 6, 4));
+        // WrapLayout so that, when the panel is too narrow for both buttons
+        // side by side, "Open in Google Maps" wraps to a second row (and the
+        // panel grows taller) instead of being clipped out of view.
+        JPanel btns = new JPanel(new WrapLayout(FlowLayout.CENTER, 6, 4));
         btns.setOpaque(false);
         btns.add(removeTagBtn);
         btns.add(mapsBtn);
@@ -205,6 +208,27 @@ public class PropertiesPanel extends JPanel {
         if (tags.isEmpty())       addRow("Tags", "—");
         else if (tags.size() == 1) addRow("Tag",  tags.get(0));
         else                       addRow("Tags", String.join(", ", tags));
+
+        // Tag comments from Autopsy (e.g. AI classifier notes). Show ALL comments,
+        // including the gallery's own "Enhanced Gallery" marker, so what the
+        // investigator sees here matches exactly what Autopsy shows for the tag.
+        // Same EDT DB-query pattern already used below for EXIF; guarded so it
+        // never breaks the panel.
+        try {
+            var tm = org.sleuthkit.autopsy.casemodule.Case.getCurrentCaseThrows()
+                    .getServices().getTagsManager();
+            java.util.List<org.sleuthkit.datamodel.ContentTag> commented =
+                    new java.util.ArrayList<>();
+            for (org.sleuthkit.datamodel.ContentTag ct : tm.getContentTagsByContent(af)) {
+                String cm = ct.getComment();
+                if (cm != null && !cm.isBlank()) commented.add(ct);
+            }
+            for (org.sleuthkit.datamodel.ContentTag ct : commented) {
+                String label = commented.size() > 1
+                        ? "Comment [" + ct.getName().getDisplayName() + "]" : "Comment";
+                addRow(label, ct.getComment());
+            }
+        } catch (Exception ignored) { /* tags manager unavailable — skip comments */ }
 
         // ── GPS from GpsCache + EXIF artifacts (called once below) ──────────────
         artifactLat = Double.NaN;
@@ -364,7 +388,9 @@ public class PropertiesPanel extends JPanel {
             JTextArea ta = new JTextArea(val.toString());
             ta.setFont(table.getFont());
             ta.setLineWrap(true);
-            ta.setWrapStyleWord(true);
+            // Character wrap (not word) so long unbroken tokens — file paths,
+            // hashes — wrap instead of overflowing and disappearing.
+            ta.setWrapStyleWord(false);
             ta.setSize(colWidth - 8, Integer.MAX_VALUE);
             int prefH = Math.max(22, ta.getPreferredSize().height + 6);
             if (table.getRowHeight(r) != prefH) table.setRowHeight(r, prefH);
@@ -490,7 +516,7 @@ public class PropertiesPanel extends JPanel {
                 JTextArea ta = new JTextArea(str);
                 ta.setFont(t.getFont().deriveFont(11f));
                 ta.setLineWrap(true);
-                ta.setWrapStyleWord(true);
+                ta.setWrapStyleWord(false); // char-wrap: long paths/hashes wrap, don't clip
                 ta.setOpaque(true);
                 ta.setBorder(new EmptyBorder(2, 4, 2, 4));
                 ta.setBackground(sel ? t.getSelectionBackground()
