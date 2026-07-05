@@ -70,9 +70,11 @@ public class ToolSettingsDialog extends JDialog {
                 setIconImage(javax.imageio.ImageIO.read(iconUrl));
         } catch (Exception ignored) {}
 
-        pack();
-        setMinimumSize(new Dimension(720, 700));
-        setPreferredSize(new Dimension(760, 740));
+        // Height reduced ~30% from the old 740px; the content scrolls, so the
+        // window fits smaller laptop screens instead of overflowing them.
+        setMinimumSize(new Dimension(720, 480));
+        setPreferredSize(new Dimension(760, 518));
+        setSize(760, 518); // explicit — otherwise pack() would size to full content height
         setLocationRelativeTo(owner);
 
         // Validate saved paths in background (doesn't block EDT)
@@ -80,7 +82,7 @@ public class ToolSettingsDialog extends JDialog {
     }
 
     private void initUI() {
-        JPanel content = new JPanel();
+        JPanel content = new WidthTrackingPanel();
         content.setLayout(new BoxLayout(content, BoxLayout.Y_AXIS));
         content.setBorder(new EmptyBorder(10, 12, 6, 12));
 
@@ -155,11 +157,11 @@ public class ToolSettingsDialog extends JDialog {
         excludeKnownCheck.setFont(excludeKnownCheck.getFont().deriveFont(12f));
         excludeKnownCheck.setOpaque(false);
         JLabel excludeDesc = new JLabel(
-                "<html><font color='gray' size='2'>" +
+                "<html><body style='width:700px'><font color='gray' size='2'>" +
                 "Skips files verified by NSRL hash sets as known-safe (Windows OS, standard apps). " +
                 "Recommended — can eliminate tens of thousands of irrelevant files. " +
                 "Takes effect on next gallery open." +
-                "</font></html>");
+                "</font></body></html>");
         excludeDesc.setBorder(new EmptyBorder(0, 4, 0, 0));
 
         filterPanel.add(excludeKnownCheck, BorderLayout.NORTH);
@@ -237,8 +239,8 @@ public class ToolSettingsDialog extends JDialog {
 
         // ── Hint ───────────────────────────────────────────────────────────
         JLabel hint = new JLabel(
-            "<html><font color='gray' size='2'>Paths saved in Autopsy user settings. " +
-            "Leave empty to auto-detect from system PATH. " +
+            "<html><font color='gray' size='2'>Paths saved in Autopsy user settings.<br>" +
+            "Leave empty to auto-detect from system PATH.<br>" +
             "Click <b>Auto-detect</b> to search common install locations.</font></html>");
         content.add(hint);
 
@@ -263,9 +265,29 @@ public class ToolSettingsDialog extends JDialog {
         btns.add(cancelBtn);
         btns.add(saveBtn);
 
+        // Scrollable so the whole settings form fits on small laptop screens.
+        JScrollPane scroll = new JScrollPane(content,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.getVerticalScrollBar().setUnitIncrement(16);
+
         setLayout(new BorderLayout());
-        add(content, BorderLayout.CENTER);
-        add(btns,    BorderLayout.SOUTH);
+        add(scroll, BorderLayout.CENTER);
+        add(btns,   BorderLayout.SOUTH);
+    }
+
+    /**
+     * BoxLayout content panel that follows the scroll viewport's width (so it
+     * never overflows horizontally and the vertical scrollbar + mouse wheel work
+     * normally) but keeps its own preferred height so it can scroll vertically.
+     */
+    private static final class WidthTrackingPanel extends JPanel implements Scrollable {
+        @Override public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+        @Override public int getScrollableUnitIncrement(Rectangle r, int o, int d) { return 16; }
+        @Override public int getScrollableBlockIncrement(Rectangle r, int o, int d) { return 120; }
+        @Override public boolean getScrollableTracksViewportWidth()  { return true; }
+        @Override public boolean getScrollableTracksViewportHeight() { return false; }
     }
 
     // ── Tool row builder ──────────────────────────────────────────────────────
