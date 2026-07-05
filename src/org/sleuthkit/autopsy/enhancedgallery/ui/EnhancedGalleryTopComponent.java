@@ -1330,6 +1330,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         activeDataSourceId = dsId;  // null = all; value = Content.getId()
         activeGroupKey      = null;
         ctxBar.setGroupName("All files");
+        groupSidebar.resetSelectionToAll(); // view resets to "All files" — keep sidebar in sync
         if (actionBar != null) actionBar.onFilteringStart();
         applyFilters();
         rebuildSidebar();  // sidebar rebuild uses same ID-based filter via applyFilters snapshot

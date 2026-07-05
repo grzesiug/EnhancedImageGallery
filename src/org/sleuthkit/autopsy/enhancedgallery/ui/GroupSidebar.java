@@ -237,6 +237,15 @@ public class GroupSidebar extends JPanel {
         headerLabel.setText(GroupKeyHelper.displayName(groupBy));
         boolean isTagGrouping = "tag".equalsIgnoreCase(groupBy);
 
+        // When the grouping MODE changes, the previously selected group key no
+        // longer applies — reset the highlighted entry to "All files" so the
+        // sidebar matches the reset view (TopComponent shows "All files" too).
+        // A rebuild with the SAME groupBy (e.g. after tagging) keeps the selection.
+        if (lastGroupBy != null && !lastGroupBy.equalsIgnoreCase(groupBy)) {
+            lastSelKey = GroupKeyHelper.ALL;
+        }
+        lastGroupBy = groupBy;
+
         Map<String, int[]> counts = new LinkedHashMap<>();
         int[] allEntry = new int[]{0, 0};
         counts.put(GroupKeyHelper.ALL, allEntry);
@@ -327,7 +336,15 @@ public class GroupSidebar extends JPanel {
         });
     }
 
-    private volatile String lastSelKey = GroupKeyHelper.ALL;
+    private volatile String lastSelKey  = GroupKeyHelper.ALL;
+    private volatile String lastGroupBy = null; // tracks grouping mode to reset selection on change
+
+    /**
+     * Resets the highlighted group to "All files". Called when the main view
+     * resets its group context (e.g. data-source switch) so the sidebar
+     * selection doesn't stay on a stale group. Takes effect on the next rebuild.
+     */
+    public void resetSelectionToAll() { lastSelKey = GroupKeyHelper.ALL; }
 
     // ── Cell renderer ─────────────────────────────────────────────────────────
 

@@ -28,8 +28,9 @@ public class ContextBar extends JPanel {
     private final JLabel       countLabel = new JLabel("0 / 0 files");
     private final JProgressBar progress   = new JProgressBar(0, 100);
 
-    // Row 2 — group path (wraps naturally in a BorderLayout CENTER)
-    private final JLabel groupLabel = new JLabel("All files");
+    // Row 2 — group path: a wrapping, read-only text area so long paths are
+    // fully visible (a JLabel with HTML doesn't wrap without a width hint).
+    private final JTextArea groupLabel = new JTextArea("All files");
 
     private static final float FS = 13f;
 
@@ -67,21 +68,48 @@ public class ContextBar extends JPanel {
         row1.setMaximumSize(new Dimension(Integer.MAX_VALUE, 30));
         row1.setAlignmentX(Component.LEFT_ALIGNMENT);
 
-        // ── Row 2: group path (full width, wraps) ─────────────────────────────
-        JPanel row2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        // ── Row 2: group path (full width, wraps to as many lines as needed) ──
+        JPanel row2 = new JPanel(new BorderLayout(4, 0));
         row2.setOpaque(false);
         row2.setAlignmentX(Component.LEFT_ALIGNMENT);
+        // Let BoxLayout stretch row2 to the full bar width so the text area
+        // receives a real width and can wrap.
+        row2.setMaximumSize(new Dimension(Integer.MAX_VALUE, Integer.MAX_VALUE));
 
         JLabel groupPrefixLabel = label("Group:");
+        groupPrefixLabel.setVerticalAlignment(SwingConstants.TOP);
+
         groupLabel.setFont(groupLabel.getFont().deriveFont(Font.BOLD, FS));
         groupLabel.setForeground(new Color(40, 60, 140));
+        groupLabel.setEditable(false);
+        groupLabel.setOpaque(false);
+        groupLabel.setLineWrap(true);
+        groupLabel.setWrapStyleWord(false); // wrap long slash-separated paths anywhere
+        groupLabel.setBorder(null);
 
-        row2.add(groupPrefixLabel);
-        row2.add(groupLabel);
+        JPanel prefixHolder = new JPanel(new BorderLayout());
+        prefixHolder.setOpaque(false);
+        prefixHolder.add(groupPrefixLabel, BorderLayout.NORTH);
+
+        row2.add(prefixHolder, BorderLayout.WEST);
+        row2.add(groupLabel,   BorderLayout.CENTER);
 
         add(row1);
         add(Box.createVerticalStrut(2));
         add(row2);
+
+        // The wrapping group-path text area computes its height from its width;
+        // once the bar has a real width, re-validate so the bar grows to fit the
+        // wrapped path (BoxLayout queries preferred height before width is known).
+        addComponentListener(new java.awt.event.ComponentAdapter() {
+            private int lastW = -1;
+            @Override public void componentResized(java.awt.event.ComponentEvent e) {
+                if (getWidth() != lastW) {
+                    lastW = getWidth();
+                    revalidate();
+                }
+            }
+        });
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -95,6 +123,10 @@ public class ContextBar extends JPanel {
      * popup and button label disambiguate duplicate names by appending the ID.
      */
     public void setDataSources(java.util.Map<Long, String> sources) {
+        // Called on each case (re)load, which resets the view to all files —
+        // reset the selection too so the button doesn't keep a stale data source
+        // from a previous open while the gallery actually shows all sources.
+        currentDsId = null;
         dsEntries.clear();
         if (sources != null) {
             for (java.util.Map.Entry<Long, String> e : sources.entrySet())
@@ -117,8 +149,8 @@ public class ContextBar extends JPanel {
     public void setGroupName(String name) {
         String full = (name != null && !name.isEmpty()) ? name : "All files";
         groupLabel.setToolTipText(full);
-        // Use <html> so Swing wraps at word/slash boundaries
-        groupLabel.setText("<html>" + escapeHtml(full) + "</html>");
+        groupLabel.setText(full);   // JTextArea wraps this to the available width
+        groupLabel.revalidate();
     }
 
     // ── DS popup ──────────────────────────────────────────────────────────────
@@ -173,16 +205,13 @@ public class ContextBar extends JPanel {
             return;
         }
         String full = disambiguatedLabel(match);
-        String lbl = full.length() > 24 ? "…" + full.substring(full.length() - 22) : full;
+        // Show the full data-source name (only clip pathologically long ones).
+        String lbl = full.length() > 60 ? "…" + full.substring(full.length() - 58) : full;
         dsButton.setText(lbl + " ▾");
         dsButton.setToolTipText(full);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    private static String escapeHtml(String s) {
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
-    }
 
     private JLabel label(String text) {
         JLabel l = new JLabel(text);
