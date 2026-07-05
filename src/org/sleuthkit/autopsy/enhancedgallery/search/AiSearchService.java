@@ -20,9 +20,11 @@ import java.util.logging.Logger;
  * <p>Design goals:
  * <ul>
  *   <li><b>Zero impact when unused.</b> Nothing here runs unless the user
- *       explicitly triggers an AI search. If {@code AIT_SERVICE_DIR} is unset,
- *       the venv/model is missing, or no FAISS index exists, the calls fail
- *       with a clear message and the rest of the gallery is unaffected.</li>
+ *       explicitly triggers an AI search. If the service can't be located/started,
+ *       the model is missing, or no FAISS index exists, the calls fail with a
+ *       clear message and the rest of the gallery is unaffected. The service is
+ *       auto-discovered (%LOCALAPPDATA%/%ProgramData%); {@code AIT_SERVICE_DIR}
+ *       is only a dev override.</li>
  *   <li><b>Own-process only.</b> The service is shared with the ingest module
  *       on port 8756. We start it lazily only if it isn't already running, and
  *       {@link #stopIfOwned()} destroys it only if WE launched it — never a
@@ -191,30 +193,56 @@ public final class AiSearchService {
 
     // ── Service location / launch (same contract as the ingest module) ─────────
 
+    // Auto-discovery matching the AI Image Triage ingest module's ServiceLocator:
+    // the portable installer drops the service in %LOCALAPPDATA%/%ProgramData%,
+    // so AIT_SERVICE_DIR is only a dev override, not a requirement. A directory
+    // counts as the service only if it contains app/main.py.
     private static File findServiceDir() throws IOException {
+        java.util.List<File> candidates = new ArrayList<>();
         String configured = System.getenv(SERVICE_DIR_ENV);
-        if (configured == null || configured.isBlank()) {
-            throw new IOException(
-                    "AI search unavailable: environment variable " + SERVICE_DIR_ENV
-                    + " is not set. Point it at the AIImageTriage 'service' directory "
-                    + "(the one containing .venv) to enable semantic search.");
+        if (configured != null && !configured.isBlank()) {
+            candidates.add(new File(configured));
         }
-        File dir = new File(configured);
-        if (!dir.isDirectory()) {
-            throw new IOException(SERVICE_DIR_ENV + " does not point to a directory: " + configured);
+        String localAppData = System.getenv("LOCALAPPDATA");
+        if (localAppData != null && !localAppData.isBlank()) {
+            candidates.add(new File(localAppData, "AIImageTriage\\service"));
         }
-        return dir;
+        String programData = System.getenv("ProgramData");
+        if (programData != null && !programData.isBlank()) {
+            candidates.add(new File(programData, "AIImageTriage\\service"));
+        }
+        for (File dir : candidates) {
+            if (dir.isDirectory() && new File(dir, "app/main.py").isFile()) {
+                return dir;
+            }
+        }
+        if (configured != null && !configured.isBlank()) {
+            throw new IOException("AI search unavailable: " + SERVICE_DIR_ENV + " ('" + configured
+                    + "') does not contain the service (no app/main.py).");
+        }
+        throw new IOException(
+                "AI search unavailable: AI Image Triage service not found. Install it "
+                + "(%LOCALAPPDATA%\\AIImageTriage\\service) or set " + SERVICE_DIR_ENV + " for a dev checkout.");
     }
 
+    // Finds the interpreter in either layout: portable bundle (python/python.exe)
+    // or a dev virtualenv (.venv). Mirrors ServiceLocator.findVenvPython.
     private static ProcessBuilder buildLaunchCommand(File serviceDir, int port) throws IOException {
-        File venvPython = new File(serviceDir, ".venv/Scripts/python.exe");
-        if (!venvPython.isFile()) venvPython = new File(serviceDir, ".venv/bin/python");
-        if (!venvPython.isFile()) {
+        File[] pythons = {
+            new File(serviceDir, "python/python.exe"),        // portable bundle (Windows)
+            new File(serviceDir, ".venv/Scripts/python.exe"),  // dev venv (Windows)
+            new File(serviceDir, ".venv/bin/python"),          // dev venv (Linux/macOS)
+        };
+        File python = null;
+        for (File p : pythons) {
+            if (p.isFile()) { python = p; break; }
+        }
+        if (python == null) {
             throw new IOException("AI search: no Python interpreter in " + serviceDir
-                    + "/.venv — create the venv and install requirements first.");
+                    + " (neither portable 'python/' nor '.venv/').");
         }
         return new ProcessBuilder(
-                venvPython.getAbsolutePath(),
+                python.getAbsolutePath(),
                 "-m", "uvicorn", "app.main:app",
                 "--host", "127.0.0.1",
                 "--port", String.valueOf(port)
