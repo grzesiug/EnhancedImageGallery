@@ -241,15 +241,40 @@ public class ThumbnailGrid extends JScrollPane {
 
             m.addSeparator();
             JMenu tagMenu = new JMenu("Tag");
-            // Use the same live Autopsy tag list as the top Tag ▾ button
-            for (String tagName : parent.getTagNames()) {
-                JMenuItem ti = new JMenuItem(tagName);
-                final String tag = tagName;
+            tagMenu.setIcon(new TagIcon(14));
+            // Same grouping/sorting as the top Tag ▾ button: custom tags
+            // (alphabetical) first, built-in standard tags in a group at the end.
+            java.util.List<String> custom     = parent.customTagsSorted();
+            java.util.List<String> predefined = parent.predefinedTagsSorted();
+            java.util.List<String> childExpl  = parent.childExploitationTagsSorted();
+            for (String tag : custom) {
+                JMenuItem ti = new JMenuItem(tag);
+                ti.addActionListener(ev -> parent.applyTag(tag));
+                tagMenu.add(ti);
+            }
+            if (!custom.isEmpty() && !predefined.isEmpty()) tagMenu.addSeparator();
+            for (String tag : predefined) {
+                JMenuItem ti = new JMenuItem(tag);
+                ti.addActionListener(ev -> parent.applyTag(tag));
+                tagMenu.add(ti);
+            }
+            if (!predefined.isEmpty() && !childExpl.isEmpty()) tagMenu.addSeparator();
+            for (String tag : childExpl) {
+                JMenuItem ti = new JMenuItem(tag);
+                ti.setForeground(new Color(0xA32D2D)); // child-exploitation group — red
                 ti.addActionListener(ev -> parent.applyTag(tag));
                 tagMenu.add(ti);
             }
             tagMenu.addSeparator();
+            JMenuItem newTag = new JMenuItem("+ New tag...");
+            newTag.setForeground(new Color(0x15803D));
+            newTag.addActionListener(ev -> parent.promptAndCreateTag(this));
+            tagMenu.add(newTag);
+            // Replace: submenu of tags to pick directly (no dialog)
+            tagMenu.add(parent.buildReplaceTagSubmenu());
+            tagMenu.addSeparator();
             JMenuItem removeAll = new JMenuItem("✕ Remove all tags");
+            removeAll.setForeground(new Color(0xB91C1C));
             removeAll.addActionListener(ev -> parent.applyTag(null));
             tagMenu.add(removeAll);
             m.add(tagMenu);
@@ -440,8 +465,17 @@ public class ThumbnailGrid extends JScrollPane {
                     paintBadge(g, "+" + (tags.size() - maxBadges),
                             new Color(80, 80, 80, 200), x + imgW - 3, badgeY, true);
                 }
-            } else if (isSeen) {
-                paintBadge(g, "👁", new Color(60,60,60,180), x+imgW-3, y+3, true);
+            }
+
+            // ── Seen indicator (bottom-left) ──────────────────────────────────
+            // Shown for ANY seen file, including tagged ones (tag badges are
+            // top-right, so there's no overlap). Raised above the hover "Follow
+            // up" bar (QTBAR_H) so that button doesn't cover it.
+            if (isSeen) {
+                int fontSize = Math.max(8, Math.min(14, thumbSize / 10));
+                int badgeH   = fontSize + 6;
+                paintBadge(g, "👁", new Color(60,60,60,180),
+                        x + 3, y + imgH - QTBAR_H - badgeH - 2, false);
             }
 
             // ── GPS dot (bottom-right inside img) ──────────────────────────

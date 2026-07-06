@@ -142,11 +142,15 @@ public class ActionBar extends JPanel {
         searchPanel.add(aiSearchBtn);
 
         // ── Tag dropdown ──────────────────────────────────────────────────────
-        JPopupMenu tagMenu = buildTagMenu();
         JButton tagBtn = toolBtn("Tag ▾");
+        tagBtn.setIcon(new TagIcon(14));
+        tagBtn.setIconTextGap(5);
         tagBtn.setToolTipText("<html>Apply a tag to selected files.<br>"
                 + "Tags are also written to Autopsy's Blackboard<br>"
                 + "and visible in Tags section of the case.</html>");
+        // Widen the button by ~100% (double its natural width).
+        Dimension tagPref = tagBtn.getPreferredSize();
+        tagBtn.setPreferredSize(new Dimension(tagPref.width * 2, tagPref.height));
         tagBtn.addActionListener(e -> {
             JPopupMenu fresh = buildTagMenu();
             fresh.show(tagBtn, 0, tagBtn.getHeight());
@@ -333,70 +337,42 @@ public class ActionBar extends JPanel {
 
     private JPopupMenu buildTagMenu() {
         JPopupMenu m = new JPopupMenu();
-        for (String t : autopsyTagNames) {
+        // Custom / AI tags first (alphabetical), then the built-in standard tags
+        // in a separate group at the end.
+        java.util.List<String> custom     = parent.customTagsSorted();
+        java.util.List<String> predefined = parent.predefinedTagsSorted();
+        java.util.List<String> childExpl  = parent.childExploitationTagsSorted();
+        for (String t : custom) {
             JMenuItem mi = new JMenuItem(t);
+            mi.addActionListener(e -> parent.applyTag(t));
+            m.add(mi);
+        }
+        if (!custom.isEmpty() && !predefined.isEmpty()) m.addSeparator();
+        for (String t : predefined) {
+            JMenuItem mi = new JMenuItem(t);
+            mi.addActionListener(e -> parent.applyTag(t));
+            m.add(mi);
+        }
+        if (!predefined.isEmpty() && !childExpl.isEmpty()) m.addSeparator();
+        for (String t : childExpl) {
+            JMenuItem mi = new JMenuItem(t);
+            mi.setForeground(new Color(0xA32D2D)); // child-exploitation group — red
             mi.addActionListener(e -> parent.applyTag(t));
             m.add(mi);
         }
         m.addSeparator();
         JMenuItem newTag = new JMenuItem("+ New tag...");
         newTag.setForeground(new Color(0x15803D));
-        newTag.addActionListener(e -> promptNewTag());
+        newTag.addActionListener(e -> parent.promptAndCreateTag(this));
         m.add(newTag);
-        JMenuItem replace = new JMenuItem("⇄ Replace selected tag(s) with...");
-        replace.addActionListener(e -> promptReplaceTag());
-        m.add(replace);
+        // Replace: submenu of tags to pick directly (no dialog) — less clicking
+        m.add(parent.buildReplaceTagSubmenu());
         m.addSeparator();
         JMenuItem rm = new JMenuItem("✕ Remove all tags");
         rm.setForeground(new Color(0xB91C1C));
         rm.addActionListener(e -> parent.applyTag(null));
         m.add(rm);
         return m;
-    }
-
-    /**
-     * Prompts for a target tag and replaces the tag(s) on the selected files
-     * with it. Untagged selected files are skipped (handled in TopComponent).
-     */
-    private void promptReplaceTag() {
-        javax.swing.JComboBox<String> combo =
-                new javax.swing.JComboBox<>(autopsyTagNames.toArray(new String[0]));
-        combo.setEditable(true); // allow choosing an existing tag OR typing a new one
-        int res = JOptionPane.showConfirmDialog(this, combo,
-                "Replace selected tag(s) with:",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
-        if (res != JOptionPane.OK_OPTION) return;
-        Object item = combo.getEditor().getItem();
-        String name = item == null ? "" : item.toString().trim();
-        if (name.isEmpty()) return;
-
-        // Reuse existing casing if the tag already exists (avoid case-only dupes)
-        String existing = autopsyTagNames.stream()
-                .filter(t -> t.equalsIgnoreCase(name))
-                .findFirst().orElse(null);
-        parent.replaceSelectedTags(existing != null ? existing : name);
-        parent.loadTagNamesFromAutopsy();
-    }
-
-    /** Prompts for a new tag name, validates it, and applies it to the current selection. */
-    private void promptNewTag() {
-        String input = JOptionPane.showInputDialog(this,
-                "Tag name:", "New Tag", JOptionPane.PLAIN_MESSAGE);
-        if (input == null) return; // cancelled
-        String name = input.trim();
-        if (name.isEmpty()) return;
-
-        // Case-insensitive duplicate check against the known tag list, so the
-        // user reuses the existing tag (with its original casing) instead of
-        // creating a near-duplicate that only differs by case.
-        String existing = autopsyTagNames.stream()
-                .filter(t -> t.equalsIgnoreCase(name))
-                .findFirst().orElse(null);
-        String finalName = existing != null ? existing : name;
-
-        parent.applyTag(finalName);
-        // Refresh dropdown so the new tag appears next time without reopening the gallery
-        parent.loadTagNamesFromAutopsy();
     }
 
     /**

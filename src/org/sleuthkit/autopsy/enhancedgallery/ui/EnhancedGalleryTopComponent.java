@@ -661,6 +661,9 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 }
                 mf.setAllTagNames(existing);
             }
+            // Adding or removing a tag counts as reviewing the file → mark Seen.
+            if (mf.getReviewState() == MediaFile.ReviewState.UNSEEN)
+                mf.setReviewState(MediaFile.ReviewState.SEEN);
             toSave.add(mf);
         }
 
@@ -695,6 +698,11 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                     existing.removeIf(t -> t.equalsIgnoreCase(finalTagName));
                     dup.setAllTagNames(existing);
                 }
+            }
+            // Tagging/untagging marks the file (and its MD5 duplicates) as Seen.
+            for (MediaFile mf : expanded) {
+                if (mf.getReviewState() == MediaFile.ReviewState.UNSEEN)
+                    mf.setReviewState(MediaFile.ReviewState.SEEN);
             }
 
             // Save + Autopsy sync (single batched pass — see applyTagBatchToAutopsy)
@@ -885,6 +893,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             MediaFile mf = visible.get(idx);
             if (!mf.isTagged()) continue; // replace only affects files that already have a tag
             mf.setAllTagNames(List.of(finalNew));
+            if (mf.getReviewState() == MediaFile.ReviewState.UNSEEN)
+                mf.setReviewState(MediaFile.ReviewState.SEEN);
             primary.add(mf);
         }
 
@@ -906,6 +916,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             List<MediaFile> expanded = expandByMd5(finalPrimary);
             for (MediaFile dup : expanded) {
                 if (!finalPrimary.contains(dup)) dup.setAllTagNames(List.of(finalNew));
+                if (dup.getReviewState() == MediaFile.ReviewState.UNSEEN)
+                    dup.setReviewState(MediaFile.ReviewState.SEEN);
             }
             if (stateStore != null) stateStore.saveBatch(expanded);
             reconcileTagsToAutopsy(expanded);
@@ -976,6 +988,129 @@ public class EnhancedGalleryTopComponent extends TopComponent {
 
     /** Current Autopsy tag names (defaults until loaded). Never null. */
     public java.util.List<String> getTagNames() { return autopsyTagNames; }
+
+    // The built-in Autopsy standard tags — grouped separately (at the end) in
+    // the tag menus so custom/AI tags come first.
+    private static final java.util.Set<String> PREDEFINED_TAGS_LC = java.util.Set.of(
+            "bookmark", "notable item", "follow up", "evidence", "ok / irrelevant", "needs review");
+
+    public static boolean isPredefinedTag(String t) {
+        return t != null && PREDEFINED_TAGS_LC.contains(t.trim().toLowerCase());
+    }
+
+    /**
+     * Child-exploitation category tags (e.g. "Child Abuse Material - (CAM)",
+     * "CGI/Animation - Child Exploitive"). Grouped separately at the very end.
+     */
+    public static boolean isChildExploitationTag(String t) {
+        return t != null && t.toLowerCase().contains("child");
+    }
+
+    /** Custom / AI tag names (not standard, not child-exploitation), alphabetical. */
+    public java.util.List<String> customTagsSorted() {
+        return autopsyTagNames.stream()
+                .filter(t -> !isPredefinedTag(t) && !isChildExploitationTag(t))
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /** Built-in standard tag names, alphabetical. */
+    public java.util.List<String> predefinedTagsSorted() {
+        return autopsyTagNames.stream()
+                .filter(EnhancedGalleryTopComponent::isPredefinedTag)
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /** Child-exploitation category tag names, alphabetical. */
+    public java.util.List<String> childExploitationTagsSorted() {
+        return autopsyTagNames.stream()
+                .filter(EnhancedGalleryTopComponent::isChildExploitationTag)
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /** The gallery window, used to center dialogs regardless of which control invoked them. */
+    private java.awt.Component dialogParent() {
+        java.awt.Window w = SwingUtilities.getWindowAncestor(this);
+        return w != null ? w : this;
+    }
+
+    /** Prompts for a new tag name and applies it to the selection. */
+    public void promptAndCreateTag(java.awt.Component invoker) {
+        String input = JOptionPane.showInputDialog(dialogParent(), "Tag name:", "New Tag",
+                JOptionPane.PLAIN_MESSAGE);
+        if (input == null) return;
+        String name = input.trim();
+        if (name.isEmpty()) return;
+        String existing = autopsyTagNames.stream()
+                .filter(t -> t.equalsIgnoreCase(name)).findFirst().orElse(null);
+        applyTag(existing != null ? existing : name);
+        loadTagNamesFromAutopsy();
+    }
+
+    /**
+     * Adds grouped, sorted tag items (custom → standard → child-exploitation,
+     * with separators) to a menu, each firing {@code onPick} with the tag name.
+     * Child-exploitation items are coloured red.
+     */
+    public void addGroupedTagItems(javax.swing.JMenu menu, java.util.function.Consumer<String> onPick) {
+        java.util.List<String> custom = customTagsSorted();
+        java.util.List<String> predef = predefinedTagsSorted();
+        java.util.List<String> ce     = childExploitationTagsSorted();
+        for (String t : custom) {
+            javax.swing.JMenuItem mi = new javax.swing.JMenuItem(t);
+            mi.addActionListener(e -> onPick.accept(t));
+            menu.add(mi);
+        }
+        if (!custom.isEmpty() && !predef.isEmpty()) menu.addSeparator();
+        for (String t : predef) {
+            javax.swing.JMenuItem mi = new javax.swing.JMenuItem(t);
+            mi.addActionListener(e -> onPick.accept(t));
+            menu.add(mi);
+        }
+        if (!predef.isEmpty() && !ce.isEmpty()) menu.addSeparator();
+        for (String t : ce) {
+            javax.swing.JMenuItem mi = new javax.swing.JMenuItem(t);
+            mi.setForeground(new java.awt.Color(0xA32D2D));
+            mi.addActionListener(e -> onPick.accept(t));
+            menu.add(mi);
+        }
+    }
+
+    /**
+     * Builds the "Replace selected tag(s) with ▸" submenu: pick a target tag
+     * directly (no dialog), or "Other / new tag…" to type a new one.
+     */
+    public javax.swing.JMenu buildReplaceTagSubmenu() {
+        javax.swing.JMenu sub = new javax.swing.JMenu("⇄ Replace selected tag(s) with");
+        addGroupedTagItems(sub, this::replaceSelectedTags);
+        sub.addSeparator();
+        javax.swing.JMenuItem other = new javax.swing.JMenuItem("Other / new tag…");
+        other.addActionListener(e -> promptAndReplaceTags(sub));
+        sub.add(other);
+        return sub;
+    }
+
+    /** Prompts for a target tag and replaces the selection's tag(s) with it. */
+    public void promptAndReplaceTags(java.awt.Component invoker) {
+        java.util.List<String> ordered = new ArrayList<>(customTagsSorted());
+        ordered.addAll(predefinedTagsSorted());
+        ordered.addAll(childExploitationTagsSorted());
+        javax.swing.JComboBox<String> combo =
+                new javax.swing.JComboBox<>(ordered.toArray(new String[0]));
+        combo.setEditable(true);
+        int res = JOptionPane.showConfirmDialog(dialogParent(), combo, "Replace selected tag(s) with:",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
+        if (res != JOptionPane.OK_OPTION) return;
+        Object item = combo.getEditor().getItem();
+        String name = item == null ? "" : item.toString().trim();
+        if (name.isEmpty()) return;
+        String existing = autopsyTagNames.stream()
+                .filter(t -> t.equalsIgnoreCase(name)).findFirst().orElse(null);
+        replaceSelectedTags(existing != null ? existing : name);
+        loadTagNamesFromAutopsy();
+    }
 
     /** Loads tag names from Autopsy and updates the ActionBar dropdown + context menu. */
     public void loadTagNamesFromAutopsy() {
