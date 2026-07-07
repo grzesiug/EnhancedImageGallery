@@ -1331,12 +1331,30 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 logger.log(Level.WARNING, "Semantic search failed", ex);
                 SwingUtilities.invokeLater(() -> {
                     statusBar.hideSpinner();
-                    JOptionPane.showMessageDialog(this,
-                            "AI search unavailable:\n" + ex.getMessage(),
-                            "AI search", JOptionPane.WARNING_MESSAGE);
+                    showAiUnavailableDialog("AI search", ex);
                 });
             }
         });
+    }
+
+    /**
+     * Shows the "AI Image Triage required" message when an AI feature can't reach
+     * a working service (module not installed / ingest not run / service down).
+     */
+    private void showAiUnavailableDialog(String feature, Exception ex) {
+        String detail = (ex != null && ex.getMessage() != null) ? ex.getMessage() : "service not reachable";
+        JOptionPane.showMessageDialog(this,
+            "<html><body style='width:420px'>"
+            + "<b>" + feature + " is powered by the AI Image Triage module.</b><br><br>"
+            + "This feature needs the <b>AI Image Triage</b> companion module for Autopsy, "
+            + "which classifies images and builds a searchable CLIP index during ingest.<br><br>"
+            + "To enable it:<br>"
+            + "&nbsp;&nbsp;1. Install the <b>AI Image Triage</b> module (.nbm) in Autopsy.<br>"
+            + "&nbsp;&nbsp;2. Run ingest with it on this case (it builds the AI index).<br><br>"
+            + "Then AI search and “Find similar” will work here.<br><br>"
+            + "<font color='gray' size='2'>Details: " + escapeHtml(detail) + "</font>"
+            + "</body></html>",
+            "AI Image Triage required", JOptionPane.INFORMATION_MESSAGE);
     }
 
     /** Runs a visual-similarity lookup for the file at the given visible index. */
@@ -1368,9 +1386,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 logger.log(Level.WARNING, "Find-similar failed", ex);
                 SwingUtilities.invokeLater(() -> {
                     statusBar.hideSpinner();
-                    JOptionPane.showMessageDialog(this,
-                            "Find similar unavailable:\n" + ex.getMessage(),
-                            "Find similar", JOptionPane.WARNING_MESSAGE);
+                    showAiUnavailableDialog("Find similar", ex);
                 });
             }
         });
