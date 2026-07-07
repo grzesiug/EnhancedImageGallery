@@ -86,6 +86,10 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     private final java.util.Map<Long, String>  dsIdToName = new java.util.LinkedHashMap<>();
     private boolean showBrokenOnly    = false;  // show only files with no thumbnail
     private volatile String searchText = null;  // case-insensitive filename substring filter
+    // Set by view-change actions (source/group/filter) so the next applyFilters
+    // scrolls the grid to the top and clears the now-stale index-based selection
+    // + properties panel. Not set by tag/seen updates (those keep the view).
+    private boolean resetViewOnNextFilter = false;
     // Semantic (AI Image Triage) search — null when inactive (normal gallery use).
     // semanticMatchIds: obj_ids returned by /search or /similar; semanticOrder:
     // same ids in relevance order so the grid can be ranked by score.
@@ -542,6 +546,9 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 ? null : searchText.trim().toLowerCase();
         final java.util.Set<Long>  semIds   = semanticMatchIds; // null = no AI filter
         final java.util.List<Long> semOrder = semanticOrder;
+        // Consume the view-reset flag (set by source/group/filter changes).
+        final boolean resetView = resetViewOnNextFilter;
+        resetViewOnNextFilter = false;
 
         filterPool.submit(() -> {
             // If a newer request came in, skip this one
@@ -581,6 +588,16 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 thumbPending.set(0);
                 thumbDone.set(0);
                 thumbnailGrid.setFiles(visible);
+                // On a source/group/filter change: the old index-based selection
+                // is now stale — clear it and the properties panel, and scroll the
+                // grid back to the top (done here, after setFiles, so it's reliable).
+                if (resetView) {
+                    selected.clear();
+                    selFile = null;
+                    propsPanel.show(null, gpsCache);
+                    if (actionBar != null) actionBar.setSelectionCount(0);
+                    thumbnailGrid.scrollToTop();
+                }
                 updateStatusBar();
                 ctxBar.updateProgress(allFiles, visible);
                 if (actionBar != null) actionBar.onFilteringDone();
@@ -1208,19 +1225,23 @@ public class EnhancedGalleryTopComponent extends TopComponent {
 
     public void toggleStatusFilter(String key) {
         if (!statusFilters.remove(key)) statusFilters.add(key);
+        resetViewOnNextFilter = true;
         applyFilters();
     }
     public void toggleTypeFilter(String key) {
         if (!typeFilters.remove(key)) typeFilters.add(key);
+        resetViewOnNextFilter = true;
         applyFilters();
     }
     public void toggleGeoOnly() {
         geoOnly = !geoOnly;
+        resetViewOnNextFilter = true;
         applyFilters();
     }
     /** Sets the filename search text (case-insensitive substring match) and re-filters. */
     public void setSearchText(String text) {
         searchText = text;
+        resetViewOnNextFilter = true;
         applyFilters();
     }
 
@@ -1362,6 +1383,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         groupBy = mode;
         activeGroupKey = null;
         ctxBar.setGroupName("All files");
+        resetViewOnNextFilter = true;
         rebuildSidebar();
         applyFilters();
     }
@@ -1454,11 +1476,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     public void onGroupSelected(String groupKey) {
         activeGroupKey = groupKey;
         ctxBar.setGroupName(groupKey != null ? groupKey : "All files");
-        selected.clear();
-        selFile = null;
+        resetViewOnNextFilter = true; // clears stale selection/panel + scrolls to top
         applyFilters();
-        // Scroll to top only on explicit group change, not on filter/tag updates
-        SwingUtilities.invokeLater(() -> thumbnailGrid.scrollToTop());
     }
 
     public void setDataSource(Long dsId) {
@@ -1466,6 +1485,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         activeGroupKey      = null;
         ctxBar.setGroupName("All files");
         groupSidebar.resetSelectionToAll(); // view resets to "All files" — keep sidebar in sync
+        resetViewOnNextFilter = true;
         if (actionBar != null) actionBar.onFilteringStart();
         applyFilters();
         rebuildSidebar();  // sidebar rebuild uses same ID-based filter via applyFilters snapshot
@@ -1473,6 +1493,12 @@ public class EnhancedGalleryTopComponent extends TopComponent {
 
     public void setShowBroken(boolean broken) {
         showBrokenOnly = broken;
+        applyFilters();
+    }
+
+    /** Re-filters AND resets the view (scroll top + clear stale selection/panel). */
+    public void applyFiltersResettingView() {
+        resetViewOnNextFilter = true;
         applyFilters();
     }
 

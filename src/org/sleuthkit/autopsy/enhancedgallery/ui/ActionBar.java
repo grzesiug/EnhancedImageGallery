@@ -273,7 +273,8 @@ public class ActionBar extends JPanel {
         parent.setGeoOnly(cbGps.isSelected());
         parent.setShowBroken(cbBroken.isSelected());
         onFilteringStart();
-        parent.applyFilters();
+        // Applying filters is a view change → scroll to top + clear stale selection
+        parent.applyFiltersResettingView();
     }
 
     /**
