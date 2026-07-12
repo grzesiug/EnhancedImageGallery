@@ -62,6 +62,11 @@ public class DecoderChain {
         if (mf.getMediaType() == MediaFile.MediaType.AUDIO) {
             return renderAudioPlaceholder(f.getName());
         }
+        // Documents show an icon+extension placeholder, never a rendered preview —
+        // no extraction, no external tool, no size limit (Phase 2 may add real text thumbs).
+        if (mf.getMediaType() == MediaFile.MediaType.DOCUMENT) {
+            return renderDocumentPlaceholder(mf.getExtension());
+        }
 
         // ── 0. Skip very large non-audio files ───────────────────────────────
         if (fileSize > MAX_DECODE_SIZE) {
@@ -84,9 +89,10 @@ public class DecoderChain {
                 String mime = mf.getMimeType();
 
                 return switch (mf.getMediaType()) {
-                    case IMAGE -> decodeImage(extracted, ext, mime);
-                    case VIDEO -> decodeVideoFrame(extracted);
-                    case AUDIO -> renderAudioPlaceholder(mf.getName()); // fallback (shouldn't reach)
+                    case IMAGE    -> decodeImage(extracted, ext, mime);
+                    case VIDEO    -> decodeVideoFrame(extracted);
+                    case AUDIO    -> renderAudioPlaceholder(mf.getName());     // fallback (shouldn't reach)
+                    case DOCUMENT -> renderDocumentPlaceholder(mf.getExtension()); // fallback (shouldn't reach)
                 };
             } catch (Exception ex) {
                 logger.log(Level.FINE, "Decode error for {0}: {1}",
@@ -247,8 +253,14 @@ public class DecoderChain {
                     .invoke(tc, kh, (float) THUMB_SIZE);
 
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            Object input  = inClass.getConstructor(java.net.URI.class)
-                    .newInstance(svgFile.toUri());
+            // Prefer feeding sanitized SVG text (strips invalid width/height="auto",
+            // which makes Batik throw and yield "no preview"). Fall back to the raw
+            // file URI if reading fails, so normal SVGs behave exactly as before.
+            String cleaned = readSvgSanitized(svgFile);
+            Object input = (cleaned != null)
+                    ? inClass.getConstructor(java.io.Reader.class)
+                          .newInstance(new java.io.StringReader(cleaned))
+                    : inClass.getConstructor(java.net.URI.class).newInstance(svgFile.toUri());
             Object output = outClass.getConstructor(OutputStream.class)
                     .newInstance((OutputStream) baos);
             tcClass.getMethod("transcode", inClass, outClass).invoke(tc, input, output);
@@ -263,6 +275,35 @@ public class DecoderChain {
             logger.log(Level.FINE, "Batik failed: {0}", ex.getMessage());
         }
         return null;
+    }
+
+    /**
+     * Reads an SVG (or gzipped .svgz) as text and strips {@code width="auto"} /
+     * {@code height="auto"} attributes on the root element. "auto" is not a valid
+     * SVG length, so Batik throws on it and produces no preview — removing the
+     * attributes lets Batik size the image from the viewBox plus our width/height
+     * transcoding hints. Returns null if the file can't be read (caller then falls
+     * back to the raw file URI). Only the first ~1&nbsp;MB is inspected — enough for
+     * any real SVG header, and avoids slurping a pathologically large file.
+     */
+    private static String readSvgSanitized(Path svgFile) {
+        try {
+            byte[] raw = Files.readAllBytes(svgFile);
+            // Gunzip .svgz (gzip magic 1F 8B).
+            if (raw.length > 2 && (raw[0] & 0xFF) == 0x1F && (raw[1] & 0xFF) == 0x8B) {
+                try (var gis = new java.util.zip.GZIPInputStream(new ByteArrayInputStream(raw))) {
+                    raw = gis.readAllBytes();
+                }
+            }
+            if (raw.length == 0 || raw.length > 8_000_000) return null; // too big → use URI path
+            String svg = new String(raw, java.nio.charset.StandardCharsets.UTF_8);
+            // Remove width/height="auto" (single or double quoted). Case-insensitive.
+            String cleaned = svg.replaceAll("(?i)\\s(?:width|height)\\s*=\\s*([\"'])\\s*auto\\s*\\1", "");
+            return cleaned.equals(svg) ? svg : cleaned; // return original if nothing changed
+        } catch (Exception ex) {
+            logger.log(Level.FINE, "SVG sanitize read failed: {0}", ex.getMessage());
+            return null;
+        }
     }
 
     /** Builds a URLClassLoader pointing at Autopsy's Batik JARs. Called once. */
@@ -458,6 +499,61 @@ public class DecoderChain {
             g.setColor(new java.awt.Color(20, green, 70));
             g.fillRoundRect(x, THUMB_SIZE/2 - h/2, barW, h, 2, 2);
         }
+        g.dispose();
+        return img;
+    }
+
+    /**
+     * A document tile: a sheet-of-paper glyph with a folded corner and the file's
+     * extension stamped across it (e.g. "PDF", "DOCX"). No preview is rendered —
+     * documents have no visual thumbnail. Modelled on the audio placeholder.
+     */
+    private static BufferedImage renderDocumentPlaceholder(String ext) {
+        BufferedImage img = new BufferedImage(THUMB_SIZE, THUMB_SIZE, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+                RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+        // Slate background
+        g.setColor(new java.awt.Color(30, 34, 44));
+        g.fillRect(0, 0, THUMB_SIZE, THUMB_SIZE);
+
+        // Paper sheet
+        int margin = THUMB_SIZE / 4;
+        int pw = THUMB_SIZE - 2 * margin;
+        int ph = (int) (pw * 1.3);
+        int px = (THUMB_SIZE - pw) / 2;
+        int py = (THUMB_SIZE - ph) / 2;
+        int fold = pw / 3;
+
+        java.awt.Polygon sheet = new java.awt.Polygon();
+        sheet.addPoint(px, py);
+        sheet.addPoint(px + pw - fold, py);
+        sheet.addPoint(px + pw, py + fold);
+        sheet.addPoint(px + pw, py + ph);
+        sheet.addPoint(px, py + ph);
+        g.setColor(new java.awt.Color(226, 230, 238));
+        g.fillPolygon(sheet);
+
+        // Folded corner
+        g.setColor(new java.awt.Color(186, 192, 205));
+        java.awt.Polygon corner = new java.awt.Polygon();
+        corner.addPoint(px + pw - fold, py);
+        corner.addPoint(px + pw, py + fold);
+        corner.addPoint(px + pw - fold, py + fold);
+        g.fillPolygon(corner);
+
+        // Extension label
+        String label = (ext == null || ext.isBlank()) ? "TXT" : ext.toUpperCase();
+        if (label.length() > 5) label = label.substring(0, 5);
+        g.setColor(new java.awt.Color(70, 80, 96));
+        int fontSize = label.length() <= 3 ? 34 : (label.length() == 4 ? 28 : 24);
+        g.setFont(new java.awt.Font("SansSerif", java.awt.Font.BOLD, fontSize));
+        java.awt.FontMetrics fm = g.getFontMetrics();
+        int tw = fm.stringWidth(label);
+        g.drawString(label, px + (pw - tw) / 2, py + ph / 2 + fm.getAscent() / 2);
+
         g.dispose();
         return img;
     }

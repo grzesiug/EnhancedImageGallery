@@ -13,7 +13,7 @@ import org.sleuthkit.datamodel.AbstractFile;
 public class MediaFile {
 
     // ── Media type ──────────────────────────────────────────────────────────
-    public enum MediaType { IMAGE, VIDEO, AUDIO }
+    public enum MediaType { IMAGE, VIDEO, AUDIO, DOCUMENT }
 
     // ── Review state ────────────────────────────────────────────────────────
     // Review state and tags are INDEPENDENT dimensions: a file can be SEEN and

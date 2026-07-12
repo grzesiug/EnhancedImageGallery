@@ -156,6 +156,14 @@ public class PropertiesPanel extends JPanel {
 
         AbstractFile af = mf.getAbstractFile();
 
+        // ── Matched text (document text search) ───────────────────────────────
+        // Shown at the top so the analyst immediately sees WHY this document matched.
+        String snippet = parent.getSemanticSnippet(af.getId());
+        if (snippet != null) {
+            section("Matched text");
+            addRow("Snippet", "…" + snippet + "…");
+        }
+
         // ── Basic file info ───────────────────────────────────────────────────
         section("File Info");
         addRow("Name",      af.getName());

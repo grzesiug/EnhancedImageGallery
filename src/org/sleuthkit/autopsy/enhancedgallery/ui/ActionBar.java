@@ -25,6 +25,9 @@ public class ActionBar extends JPanel {
     private final JCheckBox cbImage  = checkTip("Image",  true,  "Show image files (JPG, PNG, HEIC, WebP, RAW...)");
     private final JCheckBox cbVideo  = checkTip("Video",  true,  "Show video files (MP4, MOV, AVI, MKV...)");
     private final JCheckBox cbAudio  = checkTip("Audio",  true,  "Show audio files (MP3, M4A, WAV, FLAC...)");
+    private final JCheckBox cbDocument = checkTip("Documents", false,
+            "Show document files (PDF, DOCX, XLSX, TXT, EML...). Off by default — "
+            + "documents are loaded on demand only when this is enabled.");
     private final JCheckBox cbGps    = checkTip("GPS only",        false, "Show only files with GPS coordinates in EXIF");
     private final JCheckBox cbBroken = checkTip("No preview only", false, "Show only files for which thumbnail could not be generated");
 
@@ -80,7 +83,7 @@ public class ActionBar extends JPanel {
 
         // ── Type filters ──────────────────────────────────────────────────────
         JPanel tyPanel = filterGroup("Type");
-        tyPanel.add(cbImage); tyPanel.add(cbVideo); tyPanel.add(cbAudio);
+        tyPanel.add(cbImage); tyPanel.add(cbVideo); tyPanel.add(cbAudio); tyPanel.add(cbDocument);
 
         // ── More ──────────────────────────────────────────────────────────────
         JPanel moPanel = filterGroup("More");
@@ -130,10 +133,11 @@ public class ActionBar extends JPanel {
         aiSearchBtn.setIconTextGap(5);
         aiSearchBtn.setMargin(new Insets(2, 8, 2, 8));
         aiSearchBtn.setFocusPainted(false);
-        aiSearchBtn.setToolTipText("<html><b>Semantic search</b> (AI Image Triage).<br>"
-                + "Find images by meaning — describe what you're looking for.<br>"
-                + "Requires the AI service + a completed ingest with CLIP enabled.<br>"
-                + "Results can be further narrowed with the filename box.</html>");
+        aiSearchBtn.setToolTipText("<html><b>Semantic search</b> — pick the index in the dialog:<br>"
+                + "• <b>Images (visual)</b> → AI Image Triage / CLIP (describe how it looks).<br>"
+                + "• <b>Text + OCR</b> → AI Text Triage / BGE-M3 (document text + text in images), with snippets.<br>"
+                + "Requires the matching AI service + a completed ingest.<br>"
+                + "Active filters and the selected group still narrow the results.</html>");
         aiSearchBtn.addActionListener(e -> promptSemanticSearch());
 
         JPanel searchPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
@@ -249,6 +253,7 @@ public class ActionBar extends JPanel {
         if (cbImage.isSelected()) s.add("image");
         if (cbVideo.isSelected()) s.add("video");
         if (cbAudio.isSelected()) s.add("audio");
+        if (cbDocument.isSelected()) s.add("document");
         return s;
     }
     public Set<String> getActiveStatusFilters() {
@@ -270,6 +275,7 @@ public class ActionBar extends JPanel {
         Set<String> ty = parent.getTypeFilters();
         ty.clear(); if (cbImage.isSelected()) ty.add("image");
         if (cbVideo.isSelected()) ty.add("video"); if (cbAudio.isSelected()) ty.add("audio");
+        if (cbDocument.isSelected()) ty.add("document");
         parent.setGeoOnly(cbGps.isSelected());
         parent.setShowBroken(cbBroken.isSelected());
         onFilteringStart();
@@ -338,17 +344,25 @@ public class ActionBar extends JPanel {
 
     private JPopupMenu buildTagMenu() {
         JPopupMenu m = new JPopupMenu();
-        // Custom / AI tags first (alphabetical), then the built-in standard tags
-        // in a separate group at the end.
+        // Automated AI tags first (blue), then custom, built-in standard tags, and
+        // finally the child-exploitation group.
+        java.util.List<String> aiTags    = parent.aiTagsSorted();
         java.util.List<String> custom     = parent.customTagsSorted();
         java.util.List<String> predefined = parent.predefinedTagsSorted();
         java.util.List<String> childExpl  = parent.childExploitationTagsSorted();
+        for (String t : aiTags) {
+            JMenuItem mi = new JMenuItem(t);
+            mi.setForeground(EnhancedGalleryTopComponent.AI_TAG_COLOR);
+            mi.addActionListener(e -> parent.applyTag(t));
+            m.add(mi);
+        }
+        if (!aiTags.isEmpty() && !custom.isEmpty()) m.addSeparator();
         for (String t : custom) {
             JMenuItem mi = new JMenuItem(t);
             mi.addActionListener(e -> parent.applyTag(t));
             m.add(mi);
         }
-        if (!custom.isEmpty() && !predefined.isEmpty()) m.addSeparator();
+        if ((!aiTags.isEmpty() || !custom.isEmpty()) && !predefined.isEmpty()) m.addSeparator();
         for (String t : predefined) {
             JMenuItem mi = new JMenuItem(t);
             mi.addActionListener(e -> parent.applyTag(t));
@@ -382,31 +396,129 @@ public class ActionBar extends JPanel {
      * a grid filter; the filename box can further narrow it.
      */
     private void promptSemanticSearch() {
-        JTextField queryField = new JTextField(28);
-        JSpinner topN = new JSpinner(new SpinnerNumberModel(50, 1, 500, 10));
-        JPanel panel = new JPanel(new BorderLayout(6, 6));
-        JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        row.add(new JLabel("Max results:")); row.add(topN);
-        panel.add(new JLabel("Describe what to find:"), BorderLayout.NORTH);
-        panel.add(queryField, BorderLayout.CENTER);
-        panel.add(row, BorderLayout.SOUTH);
+        // Editable combo pre-filled with recent queries (newest first) + prefix
+        // autocomplete, so the analyst can re-run or refine a previous search.
+        final java.util.List<String> recent =
+                org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.getRecentSearches();
+        JComboBox<String> queryBox = new JComboBox<>(recent.toArray(new String[0]));
+        queryBox.setEditable(true);
+        queryBox.setSelectedItem("");                 // start empty, not on the newest item
+        final JTextField editor = (JTextField) queryBox.getEditor().getEditorComponent();
+        editor.setColumns(28);
+        installPrefixAutocomplete(editor, recent);
 
-        // Move focus to the query field as soon as the dialog is shown, so the
-        // user can start typing immediately (JOptionPane otherwise focuses OK).
-        queryField.addAncestorListener(new javax.swing.event.AncestorListener() {
+        // ── Index selector (explicit — the two indexes are phrased differently) ──
+        boolean textMode = org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.isAiSearchTextMode();
+        JRadioButton rbImages = new JRadioButton("Images (visual)");
+        JRadioButton rbText   = new JRadioButton("Text + OCR");
+        rbImages.setToolTipText("Visual search over the AI Image Triage index (CLIP). "
+                + "Describe what an image looks like.");
+        rbText.setToolTipText("Text search over the AI Text Triage index (BGE-M3): document "
+                + "text and text recognised inside images (OCR). Describe the wording/meaning.");
+        ButtonGroup grp = new ButtonGroup(); grp.add(rbImages); grp.add(rbText);
+        rbText.setSelected(textMode);
+        rbImages.setSelected(!textMode);
+        JPanel modeRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        modeRow.add(new JLabel("Search:")); modeRow.add(rbImages); modeRow.add(rbText);
+
+        JLabel info = new JLabel("<html><span style='color:#555'><i>Active filters and the "
+                + "selected group still apply to these results — enable the matching Type "
+                + "filter (e.g. Documents) to see all hits.</i></span></html>");
+        info.setFont(info.getFont().deriveFont(11f));
+
+        JSpinner topN = new JSpinner(new SpinnerNumberModel(50, 1, 50_000, 50));
+        JCheckBox allBox = new JCheckBox("All");
+        allBox.setToolTipText("Return every match (capped to the index size), ranked from "
+                + "most to least confident. Ignores the limit.");
+        JLabel maxLbl = new JLabel("Max results:");
+        // "All" makes the numeric limit irrelevant → grey it out.
+        allBox.addActionListener(e -> {
+            boolean all = allBox.isSelected();
+            topN.setEnabled(!all);
+            maxLbl.setEnabled(!all);
+        });
+        JPanel bottom = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        bottom.add(maxLbl); bottom.add(topN); bottom.add(allBox);
+
+        JPanel north = new JPanel();
+        north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
+        modeRow.setAlignmentX(LEFT_ALIGNMENT);
+        JLabel prompt = new JLabel("Describe what to find:");
+        prompt.setAlignmentX(LEFT_ALIGNMENT);
+        info.setAlignmentX(LEFT_ALIGNMENT);
+        north.add(modeRow);
+        north.add(prompt);
+
+        JPanel panel = new JPanel(new BorderLayout(6, 6));
+        panel.add(north, BorderLayout.NORTH);
+        panel.add(queryBox, BorderLayout.CENTER);
+        JPanel south = new JPanel(new BorderLayout(0, 4));
+        south.add(bottom, BorderLayout.NORTH);
+        south.add(info,   BorderLayout.SOUTH);
+        panel.add(south, BorderLayout.SOUTH);
+
+        // Build the option pane manually so Enter in the query editor submits (the
+        // editable combo consumes Enter, so it never reaches an OK default button).
+        JOptionPane pane = new JOptionPane(panel, JOptionPane.PLAIN_MESSAGE,
+                JOptionPane.OK_CANCEL_OPTION);
+        JDialog dialog = pane.createDialog(this, "AI semantic search");
+        editor.addActionListener(e -> pane.setValue(JOptionPane.OK_OPTION)); // Enter → OK
+        queryBox.addAncestorListener(new javax.swing.event.AncestorListener() {
             @Override public void ancestorAdded(javax.swing.event.AncestorEvent e) {
-                queryField.requestFocusInWindow();
+                editor.requestFocusInWindow();
             }
             @Override public void ancestorMoved(javax.swing.event.AncestorEvent e) {}
             @Override public void ancestorRemoved(javax.swing.event.AncestorEvent e) {}
         });
+        dialog.setVisible(true);
+        dialog.dispose();
 
-        int res = JOptionPane.showConfirmDialog(this, panel, "AI semantic search",
-                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        Object val = pane.getValue();
+        int res = (val instanceof Integer) ? (Integer) val : JOptionPane.CLOSED_OPTION;
         if (res != JOptionPane.OK_OPTION) return;
-        String query = queryField.getText().trim();
+
+        Object sel = queryBox.getEditor().getItem();
+        String query = sel == null ? "" : sel.toString().trim();
         if (query.isEmpty()) return;
-        parent.runSemanticSearch(query, (int) topN.getValue());
+
+        boolean chosenTextMode = rbText.isSelected();
+        // "All" → very large top_n; the service caps it to the actual index size and
+        // returns hits already sorted from most to least confident (by score).
+        int resultLimit = allBox.isSelected() ? 1_000_000 : (int) topN.getValue();
+        org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.setAiSearchTextMode(chosenTextMode);
+        org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.addRecentSearch(query);
+        parent.runSemanticSearch(query, resultLimit, chosenTextMode);
+    }
+
+    /**
+     * Inline prefix autocomplete for the combo editor: after each edit, if a recent
+     * query starts with what was typed, the remainder is appended and selected so
+     * the next keystroke overwrites it (Backspace/Delete never re-complete).
+     */
+    private static void installPrefixAutocomplete(JTextField editor, java.util.List<String> recent) {
+        if (recent.isEmpty()) return;
+        editor.addKeyListener(new java.awt.event.KeyAdapter() {
+            @Override public void keyReleased(java.awt.event.KeyEvent e) {
+                int k = e.getKeyCode();
+                if (k == java.awt.event.KeyEvent.VK_BACK_SPACE || k == java.awt.event.KeyEvent.VK_DELETE
+                        || k == java.awt.event.KeyEvent.VK_LEFT || k == java.awt.event.KeyEvent.VK_RIGHT
+                        || k == java.awt.event.KeyEvent.VK_ENTER || k == java.awt.event.KeyEvent.VK_HOME
+                        || k == java.awt.event.KeyEvent.VK_END || e.isActionKey()) {
+                    return;
+                }
+                String typed = editor.getText();
+                if (typed.isEmpty()) return;
+                String lower = typed.toLowerCase();
+                for (String item : recent) {
+                    if (item.length() > typed.length() && item.toLowerCase().startsWith(lower)) {
+                        editor.setText(item);
+                        editor.setCaretPosition(item.length());
+                        editor.moveCaretPosition(typed.length()); // select the completed suffix
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     // ── Style helpers ─────────────────────────────────────────────────────────

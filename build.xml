@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project name="org.sleuthkit.autopsy.enhancedgallery" default="netbeans" basedir=".">
-    <description>Builds, tests, and runs the Enhanced Image Gallery module.</description>
+    <description>Builds, tests, and runs the Enhanced Evidence Gallery module.</description>
     <import file="nbproject/build-impl.xml"/>
 </project>

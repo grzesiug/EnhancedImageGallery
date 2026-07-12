@@ -12,6 +12,7 @@ public enum MediaType {
     IMAGE,
     VIDEO,
     AUDIO,
+    DOCUMENT,
     UNKNOWN;
 
     // ── MIME type sets ────────────────────────────────────────────────────────
@@ -62,6 +63,24 @@ public enum MediaType {
         "audio/vnd.dlna.adts"
     );
 
+    // Document MIME types — MUST mirror AITextTriage's SUPPORTED_MIME_TYPES so the
+    // gallery shows exactly the files that the semantic-text index can search.
+    private static final Set<String> DOCUMENT_MIMES = Set.of(
+        "text/plain", "text/html", "text/xml", "application/xhtml+xml", "text/csv",
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.oasis.opendocument.text",
+        "application/rtf", "text/rtf",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.oasis.opendocument.presentation",
+        "message/rfc822", "application/vnd.ms-outlook"
+    );
+
     // ── Extension fallback sets ───────────────────────────────────────────────
 
     private static final Set<String> IMAGE_EXTS = Set.of(
@@ -83,6 +102,16 @@ public enum MediaType {
         "aiff","aif","opus","3gp","3g2","amr","mid","midi"
     );
 
+    private static final Set<String> DOCUMENT_EXTS = Set.of(
+        "txt","text","log","md","csv","tsv",
+        "html","htm","xhtml","xml",
+        "pdf",
+        "doc","docx","odt","rtf",
+        "xls","xlsx","ods",
+        "ppt","pptx","odp",
+        "eml","msg"
+    );
+
     // ── Public factory ────────────────────────────────────────────────────────
 
     /**
@@ -93,12 +122,26 @@ public enum MediaType {
      * @return          MediaType, never null
      */
     public static MediaType fromFile(String mimeType, String fileName) {
+        // 0 — SVG is a graphic format even when File Type Identification reports it
+        // as text/xml or text/plain (it's XML under the hood). Classify by the svg
+        // extension FIRST so it renders a real (Batik) preview instead of falling
+        // into the document text-tile path. This doesn't broaden inclusion — .svg
+        // was already treated as an image via the extension fallback below.
+        if (fileName != null) {
+            int dot0 = fileName.lastIndexOf('.');
+            if (dot0 >= 0) {
+                String ext0 = fileName.substring(dot0 + 1).toLowerCase();
+                if (ext0.equals("svg") || ext0.equals("svgz")) return IMAGE;
+            }
+        }
+
         // 1 — try MIME type (most reliable, set by File Type Identification module)
         if (mimeType != null && !mimeType.isBlank()) {
             String mime = mimeType.toLowerCase().trim();
             if (IMAGE_MIMES.contains(mime)) return IMAGE;
             if (VIDEO_MIMES.contains(mime)) return VIDEO;
             if (AUDIO_MIMES.contains(mime)) return AUDIO;
+            if (DOCUMENT_MIMES.contains(mime)) return DOCUMENT;
             // Catch-all for mime types we don't have explicit entries for
             if (mime.startsWith("image/")) return IMAGE;
             if (mime.startsWith("video/")) return VIDEO;
@@ -113,10 +156,16 @@ public enum MediaType {
                 if (IMAGE_EXTS.contains(ext)) return IMAGE;
                 if (VIDEO_EXTS.contains(ext)) return VIDEO;
                 if (AUDIO_EXTS.contains(ext)) return AUDIO;
+                if (DOCUMENT_EXTS.contains(ext)) return DOCUMENT;
             }
         }
 
         return UNKNOWN;
+    }
+
+    /** Document MIME types the gallery/text-index recognises (read-only view). */
+    public static Set<String> documentMimes() {
+        return DOCUMENT_MIMES;
     }
 
     /** Convenience: is this a file the gallery should show at all? */

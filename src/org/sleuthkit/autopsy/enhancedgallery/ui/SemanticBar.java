@@ -17,6 +17,11 @@ public class SemanticBar extends JPanel {
     private final JLabel  label    = new JLabel();
     private final JButton clearBtn = new JButton("✕ Clear");
 
+    // Remembered so updateVisible() can re-render the "N hidden by filters" suffix
+    // without the caller re-supplying the query text and total each time.
+    private String labelText = "";
+    private int    total     = 0;
+
     public SemanticBar(EnhancedGalleryTopComponent parent) {
         setLayout(new BorderLayout(8, 0));
         setBackground(new Color(0xEAF1FF));
@@ -41,14 +46,38 @@ public class SemanticBar extends JPanel {
         setVisible(false); // hidden until an AI search is active
     }
 
-    /** Shows the bar with the given query/label and result count. */
+    /** Shows the bar with the given query/label and total hit count (before filters). */
     public void showBar(String labelText, int count) {
-        label.setText("<html><b>AI:</b> "
-                + escape(labelText) + "  &mdash;  " + count + " result"
-                + (count == 1 ? "" : "s") + " (by relevance)</html>");
+        this.labelText = labelText;
+        this.total     = count;
+        render(count); // no filtering applied yet — shown == total
         setVisible(true);
         revalidate();
         repaint();
+    }
+
+    /**
+     * Updates the bar after filtering: {@code shown} hits remain visible; the rest
+     * of the {@code total} are hidden by the active filters / selected group.
+     */
+    public void updateVisible(int shown) {
+        render(shown);
+        revalidate();
+        repaint();
+    }
+
+    private void render(int shown) {
+        int hidden = Math.max(0, total - shown);
+        StringBuilder sb = new StringBuilder("<html><b>AI:</b> ");
+        sb.append(escape(labelText)).append("  &mdash;  ")
+          .append(shown).append(" result").append(shown == 1 ? "" : "s")
+          .append(" (by relevance)");
+        if (hidden > 0) {
+            sb.append("  <span style='color:#9A3412'>&mdash; ").append(hidden)
+              .append(" hidden by filters</span>");
+        }
+        sb.append("</html>");
+        label.setText(sb.toString());
     }
 
     public void hideBar() {

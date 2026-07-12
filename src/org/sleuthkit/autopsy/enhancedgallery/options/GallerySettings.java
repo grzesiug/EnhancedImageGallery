@@ -22,6 +22,13 @@ public final class GallerySettings {
     private static final String KEY_SIDEBAR_DEBOUNCE = "sidebar.debounce.seconds";
     private static final String KEY_PROPAGATE_MD5   = "review.propagate.md5";
     private static final String KEY_MD5_MAX_FILES   = "review.propagate.md5.maxfiles";
+    private static final String KEY_RECENT_SEARCHES = "aisearch.recent";
+    private static final String KEY_AISEARCH_TEXTMODE = "aisearch.textmode";
+
+    /** How many recent AI search queries are remembered for autocomplete. */
+    public static final int RECENT_SEARCHES_MAX = 5;
+    // Separator that cannot appear in a normal query line (queries are single-line).
+    private static final String RECENT_SEP = "\n";
 
     private GallerySettings() {}
 
@@ -110,5 +117,47 @@ public final class GallerySettings {
     }
     public static void setMd5MaxFiles(int n) {
         PREFS.putInt(KEY_MD5_MAX_FILES, Math.max(1, Math.min(10000, n)));
+    }
+
+    // ── AI search mode ────────────────────────────────────────────────────────
+
+    /**
+     * Which index the AI search dialog targets: {@code true} = Text + OCR
+     * (AI Text Triage / BGE-M3), {@code false} = Images / visual (AI Image Triage /
+     * CLIP). Remembers the analyst's last choice. Default: false (visual — back-compat).
+     */
+    public static boolean isAiSearchTextMode() {
+        return PREFS.getBoolean(KEY_AISEARCH_TEXTMODE, false);
+    }
+    public static void setAiSearchTextMode(boolean textMode) {
+        PREFS.putBoolean(KEY_AISEARCH_TEXTMODE, textMode);
+    }
+
+    // ── Recent AI searches (autocomplete history) ─────────────────────────────
+
+    /** Recent AI search queries, most-recent first (up to {@link #RECENT_SEARCHES_MAX}). */
+    public static java.util.List<String> getRecentSearches() {
+        String raw = PREFS.get(KEY_RECENT_SEARCHES, "");
+        if (raw.isBlank()) return new java.util.ArrayList<>();
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (String s : raw.split(RECENT_SEP)) {
+            if (!s.isBlank()) out.add(s);
+        }
+        return out;
+    }
+
+    /**
+     * Records a query at the front of the recent-search history: de-duplicated
+     * (case-insensitive), newest-first, capped at {@link #RECENT_SEARCHES_MAX}.
+     */
+    public static void addRecentSearch(String query) {
+        if (query == null) return;
+        String q = query.trim();
+        if (q.isEmpty() || q.contains(RECENT_SEP)) return; // keep entries single-line
+        java.util.List<String> list = getRecentSearches();
+        list.removeIf(s -> s.equalsIgnoreCase(q));
+        list.add(0, q);
+        while (list.size() > RECENT_SEARCHES_MAX) list.remove(list.size() - 1);
+        PREFS.put(KEY_RECENT_SEARCHES, String.join(RECENT_SEP, list));
     }
 }

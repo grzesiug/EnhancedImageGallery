@@ -13,56 +13,69 @@ import java.util.logging.Level;
 import java.util.logging.Logger;
 
 /**
- * Thin client + lifecycle manager for the AI Image Triage Python service,
- * used by Enhanced Evidence Gallery for semantic search ({@code /search}) and
- * visual-similarity lookup ({@code /similar}).
+ * Thin client + lifecycle manager for the <b>AI Text Triage</b> Python service
+ * (semantic DOCUMENT search over a BGE-M3 index), used by Enhanced Evidence Gallery
+ * for {@code /search} and {@code /similar} on port 8757.
  *
- * <p>Design goals:
+ * <p>This is the text-modality twin of {@link AiSearchService} (which talks to the
+ * AI Image Triage CLIP service on 8756). The two indexes live in <em>different</em>
+ * embedding spaces (CLIP image↔text vs. BGE-M3 text↔text) with non-comparable
+ * score scales, so a text query is routed here only for documents — never merged
+ * with CLIP results by raw score. See the gallery's search dispatch for routing.
+ *
+ * <p>Design goals are identical to {@link AiSearchService}:
  * <ul>
- *   <li><b>Zero impact when unused.</b> Nothing here runs unless the user
- *       explicitly triggers an AI search. If the service can't be located/started,
- *       the model is missing, or no FAISS index exists, the calls fail with a
- *       clear message and the rest of the gallery is unaffected. The service is
- *       auto-discovered (%LOCALAPPDATA%/%ProgramData%); {@code AIT_SERVICE_DIR}
- *       is only a dev override.</li>
- *   <li><b>Own-process only.</b> The service is shared with the ingest module
- *       on port 8756. We start it lazily only if it isn't already running, and
- *       {@link #stopIfOwned()} destroys it only if WE launched it — never a
- *       service owned by an active ingest.</li>
- *   <li><b>Classic HTTP.</b> Uses {@link HttpURLConnection}, not
- *       {@code java.net.http.HttpClient}, whose NIO selector thread deadlocks
- *       under Autopsy's security-manager JVM. Same reason MiniJson replaces
- *       Gson — no external jars via Class-Path (NetBeans classloader deadlock).</li>
+ *   <li><b>Zero impact when unused.</b> Nothing starts unless the user triggers a
+ *       document text search. Auto-discovered under %LOCALAPPDATA%/%ProgramData%;
+ *       {@code AITT_SERVICE_DIR} is only a dev override.</li>
+ *   <li><b>Own-process only.</b> Started lazily if not already running (e.g. left
+ *       by a Text-Triage ingest); {@link #stopIfOwned()} destroys only our process.</li>
+ *   <li><b>Classic HTTP + MiniJson.</b> {@link HttpURLConnection}, never
+ *       {@code java.net.http.HttpClient} (NIO deadlock under Autopsy's security
+ *       manager); no external JSON jars (NetBeans classloader deadlock).</li>
  * </ul>
  */
-public final class AiSearchService {
+public final class AiTextSearchService {
 
-    private static final Logger logger = Logger.getLogger(AiSearchService.class.getName());
-    private static final AiSearchService INSTANCE = new AiSearchService();
+    private static final Logger logger = Logger.getLogger(AiTextSearchService.class.getName());
+    private static final AiTextSearchService INSTANCE = new AiTextSearchService();
 
-    private static final String SERVICE_DIR_ENV = "AIT_SERVICE_DIR";
-    private static final int    PORT            = 8756;
+    private static final String SERVICE_DIR_ENV = "AITT_SERVICE_DIR";
+    private static final int    PORT            = 8757;
     private static final String BASE            = "http://127.0.0.1:" + PORT;
     private static final int    HEALTH_TIMEOUT_MS       = 1000;
-    private static final int    SEARCH_TIMEOUT_MS       = 30000; // first /search loads CLIP
+    private static final int    SEARCH_TIMEOUT_MS       = 30000; // first /search loads BGE-M3
     private static final int    STARTUP_HEALTH_RETRIES  = 40;
     private static final long   STARTUP_RETRY_DELAY_MS  = 500;
 
     /** Non-null only if THIS process launched the service (so we may stop it). */
     private Process ownedProcess;
 
-    private AiSearchService() {}
+    private AiTextSearchService() {}
 
-    public static AiSearchService getInstance() { return INSTANCE; }
+    public static AiTextSearchService getInstance() { return INSTANCE; }
 
     // ── Result type ───────────────────────────────────────────────────────────
 
-    /** One search/similar hit: Autopsy obj_id + cosine-similarity score. */
-    public record Hit(long fileId, double score) {}
+    /**
+     * One document search/similar hit: Autopsy obj_id, best matching chunk index,
+     * cosine-similarity score, and a short snippet of the matched text (may be
+     * empty — always handle defensively).
+     */
+    public record TextHit(long fileId, int chunkIdx, double score, String snippet) {}
 
-    /** Thrown by {@link #search} when the service has CLIP disabled (HTTP 503). */
-    public static final class ClipDisabledException extends IOException {
-        public ClipDisabledException(String msg) { super(msg); }
+    /** Thrown by {@link #search} when the embedder is a stub / has no weights (HTTP 503). */
+    public static final class EmbedderUnavailableException extends IOException {
+        public EmbedderUnavailableException(String msg) { super(msg); }
+    }
+
+    /**
+     * Thrown by {@link #search}/{@link #similar} when the index was built with a
+     * different embedding model than the running service (HTTP 409). The case must
+     * be re-ingested with the current Text-Triage model before search will work.
+     */
+    public static final class IndexModelMismatchException extends IOException {
+        public IndexModelMismatchException(String msg) { super(msg); }
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -76,9 +89,9 @@ public final class AiSearchService {
     }
 
     /**
-     * Ensures the service is running: no-op if already healthy (e.g. left by
-     * ingest), otherwise launches it and waits until healthy. Only the launched
-     * process is tracked for later shutdown.
+     * Ensures the service is running: no-op if already healthy (e.g. left by a
+     * Text-Triage ingest), otherwise launches it and waits until healthy. Only the
+     * launched process is tracked for later shutdown.
      *
      * @throws IOException if the service dir/venv is missing or startup times out
      */
@@ -89,21 +102,21 @@ public final class AiSearchService {
         ProcessBuilder pb = buildLaunchCommand(serviceDir, PORT);
         pb.redirectErrorStream(true);
         pb.redirectOutput(ProcessBuilder.Redirect.to(logFile()));
-        logger.log(Level.INFO, "EIG launching AI service: {0}", pb.command());
+        logger.log(Level.INFO, "EIG launching AI text service: {0}", pb.command());
         ownedProcess = pb.start();
 
         for (int i = 0; i < STARTUP_HEALTH_RETRIES; i++) {
             if (isHealthy()) {
-                logger.log(Level.INFO, "AI service healthy on port {0}", PORT);
+                logger.log(Level.INFO, "AI text service healthy on port {0}", PORT);
                 return;
             }
             try { Thread.sleep(STARTUP_RETRY_DELAY_MS); }
             catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
-                throw new IOException("Interrupted while starting AI service", ie);
+                throw new IOException("Interrupted while starting AI text service", ie);
             }
         }
-        throw new IOException("AI service did not become healthy within "
+        throw new IOException("AI text service did not become healthy within "
                 + (STARTUP_HEALTH_RETRIES * STARTUP_RETRY_DELAY_MS / 1000) + "s");
     }
 
@@ -123,31 +136,33 @@ public final class AiSearchService {
     // ── Queries ───────────────────────────────────────────────────────────────
 
     /**
-     * Semantic text search. Returns hits ordered by descending score.
-     * @throws ClipDisabledException if the service returns 503 (CLIP not enabled)
+     * Semantic document text search. Returns hits ordered by descending score
+     * (top-N files, best chunk per file). A missing/empty index returns an empty
+     * list (HTTP 200 with results:[]), not an error.
+     *
+     * @throws EmbedderUnavailableException if the service returns 503 (no weights)
+     * @throws IndexModelMismatchException  if the service returns 409 (re-ingest needed)
      */
-    public List<Hit> search(String query, String indexDir, int topN) throws IOException {
+    public List<TextHit> search(String query, String indexDir, int topN) throws IOException {
         String url = BASE + "/search?query=" + enc(query)
                 + "&index_dir=" + enc(indexDir) + "&top_n=" + topN;
         HttpURLConnection c = open(url, "GET", SEARCH_TIMEOUT_MS);
         try {
             int code = c.getResponseCode();
-            if (code == 503) {
-                throw new ClipDisabledException(
-                        "Text search needs CLIP enabled in the AI service config.");
-            }
+            checkErrorCode(code, c);
             if (code != 200) throw new IOException("/search returned HTTP " + code);
             return parseHits(readBody(c));
         } finally { c.disconnect(); }
     }
 
-    /** Visual-similarity lookup by file obj_id. Does not require CLIP in memory. */
-    public List<Hit> similar(long fileId, String indexDir, int topN) throws IOException {
+    /** Similar-document lookup by file obj_id (excludes the file itself). */
+    public List<TextHit> similar(long fileId, String indexDir, int topN) throws IOException {
         String url = BASE + "/similar?file_id=" + fileId
                 + "&index_dir=" + enc(indexDir) + "&top_n=" + topN;
         HttpURLConnection c = open(url, "GET", SEARCH_TIMEOUT_MS);
         try {
             int code = c.getResponseCode();
+            checkErrorCode(code, c);
             if (code != 200) throw new IOException("/similar returned HTTP " + code);
             return parseHits(readBody(c));
         } finally { c.disconnect(); }
@@ -155,19 +170,49 @@ public final class AiSearchService {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    /** Maps the Text-Triage error contract (503 stub, 409 model mismatch, 422 empty). */
+    private static void checkErrorCode(int code, HttpURLConnection c) throws IOException {
+        if (code == 200) return;
+        String detail = readErrorDetail(c);
+        switch (code) {
+            case 503 -> throw new EmbedderUnavailableException(detail != null ? detail
+                    : "The AI Text Triage embedder has no model weights (stub).");
+            case 409 -> throw new IndexModelMismatchException(detail != null ? detail
+                    : "The text index was built with a different model — re-ingest is required.");
+            case 422 -> throw new IOException(detail != null ? detail : "Empty query.");
+            default  -> { /* fall through to generic handling in caller */ }
+        }
+    }
+
+    /** Reads FastAPI's {"detail": "..."} error body (best effort, may be null). */
+    private static String readErrorDetail(HttpURLConnection c) {
+        try {
+            java.io.InputStream es = c.getErrorStream();
+            if (es == null) return null;
+            String body = new String(es.readAllBytes(), StandardCharsets.UTF_8);
+            Map<String, Object> root = MiniJson.parseObject(body);
+            Object d = root.get("detail");
+            return d != null ? d.toString() : null;
+        } catch (Exception e) { return null; }
+    }
+
     @SuppressWarnings("unchecked")
-    private static List<Hit> parseHits(String json) {
+    private static List<TextHit> parseHits(String json) {
         Map<String, Object> root = MiniJson.parseObject(json);
         Object resultsObj = root.get("results");
-        List<Hit> hits = new ArrayList<>();
+        List<TextHit> hits = new ArrayList<>();
         if (resultsObj instanceof List<?> results) {
             for (Object o : results) {
                 if (o instanceof Map<?, ?> m) {
                     Object fid = m.get("file_id");
-                    Object sc  = m.get("score");
                     if (fid instanceof Number n) {
-                        double score = (sc instanceof Number sn) ? sn.doubleValue() : 0.0;
-                        hits.add(new Hit(n.longValue(), score));
+                        Object ci = m.get("chunk_idx");
+                        Object sc = m.get("score");
+                        Object sn = m.get("snippet");
+                        int    chunk   = (ci instanceof Number cn) ? cn.intValue() : 0;
+                        double score   = (sc instanceof Number sn2) ? sn2.doubleValue() : 0.0;
+                        String snippet = (sn != null) ? sn.toString() : "";
+                        hits.add(new TextHit(n.longValue(), chunk, score, snippet));
                     }
                 }
             }
@@ -191,12 +236,12 @@ public final class AiSearchService {
         return URLEncoder.encode(s, StandardCharsets.UTF_8);
     }
 
-    // ── Service location / launch (same contract as the ingest module) ─────────
+    // ── Service location / launch (same contract as the Text-Triage ingest module) ──
 
-    // Auto-discovery matching the AI Image Triage ingest module's ServiceLocator:
+    // Auto-discovery matching the AI Text Triage ingest module's ServiceLocator:
     // the portable installer drops the service in %LOCALAPPDATA%/%ProgramData%,
-    // so AIT_SERVICE_DIR is only a dev override, not a requirement. A directory
-    // counts as the service only if it contains app/main.py.
+    // so AITT_SERVICE_DIR is only a dev override. A directory counts as the
+    // service only if it contains app/main.py.
     private static File findServiceDir() throws IOException {
         java.util.List<File> candidates = new ArrayList<>();
         String configured = System.getenv(SERVICE_DIR_ENV);
@@ -205,11 +250,11 @@ public final class AiSearchService {
         }
         String localAppData = System.getenv("LOCALAPPDATA");
         if (localAppData != null && !localAppData.isBlank()) {
-            candidates.add(new File(localAppData, "AIImageTriage\\service"));
+            candidates.add(new File(localAppData, "AITextTriage\\service"));
         }
         String programData = System.getenv("ProgramData");
         if (programData != null && !programData.isBlank()) {
-            candidates.add(new File(programData, "AIImageTriage\\service"));
+            candidates.add(new File(programData, "AITextTriage\\service"));
         }
         for (File dir : candidates) {
             if (dir.isDirectory() && new File(dir, "app/main.py").isFile()) {
@@ -217,12 +262,12 @@ public final class AiSearchService {
             }
         }
         if (configured != null && !configured.isBlank()) {
-            throw new IOException("AI search unavailable: " + SERVICE_DIR_ENV + " ('" + configured
+            throw new IOException("Document search unavailable: " + SERVICE_DIR_ENV + " ('" + configured
                     + "') does not contain the service (no app/main.py).");
         }
         throw new IOException(
-                "AI search unavailable: AI Image Triage service not found. Install it "
-                + "(%LOCALAPPDATA%\\AIImageTriage\\service) or set " + SERVICE_DIR_ENV + " for a dev checkout.");
+                "Document search unavailable: AI Text Triage service not found. Install it "
+                + "(%LOCALAPPDATA%\\AITextTriage\\service) or set " + SERVICE_DIR_ENV + " for a dev checkout.");
     }
 
     // Finds the interpreter in either layout: portable bundle (python/python.exe)
@@ -238,7 +283,7 @@ public final class AiSearchService {
             if (p.isFile()) { python = p; break; }
         }
         if (python == null) {
-            throw new IOException("AI search: no Python interpreter in " + serviceDir
+            throw new IOException("Document search: no Python interpreter in " + serviceDir
                     + " (neither portable 'python/' nor '.venv/').");
         }
         return new ProcessBuilder(
@@ -250,6 +295,6 @@ public final class AiSearchService {
     }
 
     private static File logFile() {
-        return new File(System.getProperty("java.io.tmpdir"), "ai-image-triage-service.log");
+        return new File(System.getProperty("java.io.tmpdir"), "ai-text-triage-service.log");
     }
 }

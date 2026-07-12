@@ -223,16 +223,21 @@ public class ToolSettingsDialog extends JDialog {
         content.add(Box.createVerticalStrut(8));
 
         // ── About ──────────────────────────────────────────────────────────
-        JPanel aboutPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
-        aboutPanel.setBorder(titled("About Enhanced Image Gallery"));
+        JPanel aboutPanel = new JPanel(new BorderLayout(12, 0));
+        aboutPanel.setBorder(titled("About Enhanced Evidence Gallery"));
+        org.sleuthkit.autopsy.enhancedgallery.ui.SpiscomLogo aboutLogo =
+                new org.sleuthkit.autopsy.enhancedgallery.ui.SpiscomLogo(56);
+        JPanel logoHolder = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        logoHolder.add(aboutLogo);
         JLabel aboutLabel = new JLabel(
-            "<html><b>Enhanced Image Gallery</b> — Autopsy forensic module<br>"
+            "<html><b>Enhanced Evidence Gallery</b> — Autopsy forensic module<br>"
             + "Extends Autopsy's built-in gallery with support for HEIC, WebP, AVIF, SVG, RAW,<br>"
             + "video thumbnails, EXIF metadata, GPS mapping, and bulk review workflow.<br><br>"
             + "<b>Author:</b> Grzegorz Ginalski &nbsp; "
             + "<a href='https://github.com/grzesiug'>github.com/grzesiug</a></html>");
         aboutLabel.setFont(aboutLabel.getFont().deriveFont(11f));
-        aboutPanel.add(aboutLabel);
+        aboutPanel.add(logoHolder, BorderLayout.NORTH);
+        aboutPanel.add(aboutLabel, BorderLayout.CENTER);
         content.add(aboutPanel);
 
         content.add(Box.createVerticalStrut(8));

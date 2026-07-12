@@ -15,7 +15,7 @@ import org.sleuthkit.autopsy.enhancedgallery.datamodel.*;
 import org.sleuthkit.autopsy.enhancedgallery.decoder.DecoderChain;
 
 /**
- * Main window (TopComponent) of the Enhanced Image Gallery.
+ * Main window (TopComponent) of the Enhanced Evidence Gallery.
  *
  * Layout (matches the final mockup):
  *
@@ -96,6 +96,16 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     private volatile java.util.Set<Long>  semanticMatchIds = null;
     private volatile java.util.List<Long> semanticOrder    = null;
     private volatile String semanticLabel = null; // e.g. 'osoba z dokumentem' or 'IMG_1234.jpg'
+    // Matched-text snippets from a document (BGE-M3) search, keyed by obj_id — shown
+    // in the tile tooltip and PropertiesPanel. Null for visual (CLIP) searches.
+    private volatile java.util.Map<Long, String> semanticSnippets = null;
+    // Documents are loaded lazily (option b): only the first time the user enables
+    // the "Documents" type filter. Pure-image analysts never pay the load cost.
+    private volatile boolean documentsLoaded  = false;
+    private volatile boolean documentsLoading = false;
+    // Last type-filter set the sidebar was built for — when it changes, the sidebar
+    // groups are rebuilt so they track the visible types (see rebuildSidebar).
+    private Set<String> lastSidebarTypes = null;
 
     // Selection
     private final Set<Integer>  selected  = new LinkedHashSet<>();
@@ -271,6 +281,13 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         groupBy            = "path";
         selected.clear();
         selFile          = null;
+        // allFiles was just cleared, so any previously-loaded documents are gone too:
+        // reset the lazy-load flags, otherwise ensureDocumentsLoaded() would treat the
+        // stale "already loaded" state as current and never re-query documents when the
+        // gallery is reopened on the same TopComponent instance (no Autopsy restart).
+        documentsLoaded  = false;
+        documentsLoading = false;
+        lastSidebarTypes = null;
         SwingUtilities.invokeLater(() -> { if (actionBar != null) actionBar.resetGroupBy(); });
 
         // Build ID -> name map from all data sources (authoritative, ID-based).
@@ -530,7 +547,45 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     }
 
     /** Rebuilds visible list via filterPool. Newer calls cancel older pending ones. */
+    /**
+     * Lazily loads document files the first time the "Documents" filter is enabled
+     * (option b). Runs the document-only query on the loader pool, appends results
+     * to {@link #allFiles}, then re-applies filters so the new tiles appear. No-op
+     * once the documents are loaded or a load is already in progress.
+     */
+    private void ensureDocumentsLoaded() {
+        if (documentsLoaded || documentsLoading) return;
+        documentsLoading = true;
+        logger.log(Level.INFO, "Documents filter enabled — loading document files on demand");
+        if (statusBar != null) statusBar.startIndeterminate("Loading documents…");
+
+        final var loader = new org.sleuthkit.autopsy.enhancedgallery.datamodel
+                .GalleryFileLoader(stateStore);
+        loaderPool.submit(() -> loader.loadDocuments(
+            batch -> allFiles.addAll(batch),
+            () -> SwingUtilities.invokeLater(() -> {
+                documentsLoaded  = true;
+                documentsLoading = false;
+                if (statusBar != null) statusBar.hideSpinner();
+                applyFilters();          // re-run so freshly loaded documents are shown
+                rebuildSidebarDebounced(); // document counts now appear in groups
+                updateStatusBar();
+            })
+        ));
+    }
+
     public void applyFilters() {
+        // Lazy document load (option b): the first time "Documents" is enabled, pull
+        // document files in the background and re-apply once they're in allFiles.
+        if (typeFilters.contains("document")) ensureDocumentsLoaded();
+
+        // When the visible type set changes, rebuild the sidebar so its groups
+        // (MIME, extension, …) match the types now shown in the grid.
+        if (!typeFilters.equals(lastSidebarTypes)) {
+            lastSidebarTypes = new HashSet<>(typeFilters);
+            rebuildSidebarDebounced();
+        }
+
         final int myGen = filterGen.incrementAndGet();
 
         // Snapshot filter state on EDT
@@ -600,6 +655,11 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 }
                 updateStatusBar();
                 ctxBar.updateProgress(allFiles, visible);
+                // Update the AI bar's "N hidden by filters" counter (semIds != null
+                // means an AI search is active; total is what the bar already stores).
+                if (semanticBar != null && semIds != null) {
+                    semanticBar.updateVisible(visible.size());
+                }
                 if (actionBar != null) actionBar.onFilteringDone();
                 SwingUtilities.invokeLater(this::requestThumbsForViewport);
             });
@@ -1015,18 +1075,41 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         return t != null && PREDEFINED_TAGS_LC.contains(t.trim().toLowerCase());
     }
 
+    // Prefixes used by the automated triage modules for their tag names. These get
+    // their OWN group in the tag menus and TAKE PRECEDENCE over every other category
+    // (so e.g. "TxtAI: Child exploid" is grouped as an AI tag, not lumped in with the
+    // child-exploitation heuristic below).
+    private static final String[] AI_TAG_PREFIXES = { "ai:", "clipai:", "txtai:" };
+
+    /** True for automated triage tags ("AI:", "ClipAI:", "TxtAI:" — case-insensitive). */
+    public static boolean isAiTag(String t) {
+        if (t == null) return false;
+        String lc = t.trim().toLowerCase();
+        for (String p : AI_TAG_PREFIXES) if (lc.startsWith(p)) return true;
+        return false;
+    }
+
     /**
      * Child-exploitation category tags (e.g. "Child Abuse Material - (CAM)",
      * "CGI/Animation - Child Exploitive"). Grouped separately at the very end.
+     * AI-prefixed tags are excluded — their own group wins.
      */
     public static boolean isChildExploitationTag(String t) {
-        return t != null && t.toLowerCase().contains("child");
+        return t != null && !isAiTag(t) && t.toLowerCase().contains("child");
     }
 
-    /** Custom / AI tag names (not standard, not child-exploitation), alphabetical. */
+    /** Automated triage tag names (AI:/ClipAI:/TxtAI: prefixed), alphabetical. */
+    public java.util.List<String> aiTagsSorted() {
+        return autopsyTagNames.stream()
+                .filter(EnhancedGalleryTopComponent::isAiTag)
+                .sorted(String.CASE_INSENSITIVE_ORDER)
+                .collect(java.util.stream.Collectors.toList());
+    }
+
+    /** Custom tag names (not AI, not standard, not child-exploitation), alphabetical. */
     public java.util.List<String> customTagsSorted() {
         return autopsyTagNames.stream()
-                .filter(t -> !isPredefinedTag(t) && !isChildExploitationTag(t))
+                .filter(t -> !isAiTag(t) && !isPredefinedTag(t) && !isChildExploitationTag(t))
                 .sorted(String.CASE_INSENSITIVE_ORDER)
                 .collect(java.util.stream.Collectors.toList());
     }
@@ -1034,7 +1117,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     /** Built-in standard tag names, alphabetical. */
     public java.util.List<String> predefinedTagsSorted() {
         return autopsyTagNames.stream()
-                .filter(EnhancedGalleryTopComponent::isPredefinedTag)
+                .filter(t -> !isAiTag(t) && isPredefinedTag(t))
                 .sorted(String.CASE_INSENSITIVE_ORDER)
                 .collect(java.util.stream.Collectors.toList());
     }
@@ -1046,6 +1129,9 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 .sorted(String.CASE_INSENSITIVE_ORDER)
                 .collect(java.util.stream.Collectors.toList());
     }
+
+    /** Colour used to mark automated (AI) tags in the menus. */
+    public static final java.awt.Color AI_TAG_COLOR = new java.awt.Color(0x1D4ED8);
 
     /** The gallery window, used to center dialogs regardless of which control invoked them. */
     private java.awt.Component dialogParent() {
@@ -1072,15 +1158,23 @@ public class EnhancedGalleryTopComponent extends TopComponent {
      * Child-exploitation items are coloured red.
      */
     public void addGroupedTagItems(javax.swing.JMenu menu, java.util.function.Consumer<String> onPick) {
+        java.util.List<String> ai     = aiTagsSorted();
         java.util.List<String> custom = customTagsSorted();
         java.util.List<String> predef = predefinedTagsSorted();
         java.util.List<String> ce     = childExploitationTagsSorted();
+        for (String t : ai) {
+            javax.swing.JMenuItem mi = new javax.swing.JMenuItem(t);
+            mi.setForeground(AI_TAG_COLOR);
+            mi.addActionListener(e -> onPick.accept(t));
+            menu.add(mi);
+        }
+        if (!ai.isEmpty() && !custom.isEmpty()) menu.addSeparator();
         for (String t : custom) {
             javax.swing.JMenuItem mi = new javax.swing.JMenuItem(t);
             mi.addActionListener(e -> onPick.accept(t));
             menu.add(mi);
         }
-        if (!custom.isEmpty() && !predef.isEmpty()) menu.addSeparator();
+        if ((!ai.isEmpty() || !custom.isEmpty()) && !predef.isEmpty()) menu.addSeparator();
         for (String t : predef) {
             javax.swing.JMenuItem mi = new javax.swing.JMenuItem(t);
             mi.addActionListener(e -> onPick.accept(t));
@@ -1111,7 +1205,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
 
     /** Prompts for a target tag and replaces the selection's tag(s) with it. */
     public void promptAndReplaceTags(java.awt.Component invoker) {
-        java.util.List<String> ordered = new ArrayList<>(customTagsSorted());
+        java.util.List<String> ordered = new ArrayList<>(aiTagsSorted());
+        ordered.addAll(customTagsSorted());
         ordered.addAll(predefinedTagsSorted());
         ordered.addAll(childExploitationTagsSorted());
         javax.swing.JComboBox<String> combo =
@@ -1261,6 +1356,24 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         }
     }
 
+    /** Per-case BGE-M3 document index directory (AI Text Triage), or null if no case. */
+    private String currentTextIndexDir() {
+        try {
+            String moduleOutput = Case.getCurrentCaseThrows().getModuleDirectory();
+            return new java.io.File(moduleOutput, "AITextTriage").getAbsolutePath();
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /** Matched-text snippet for a document hit (from the last text search), or null. */
+    public String getSemanticSnippet(long objId) {
+        java.util.Map<Long, String> s = semanticSnippets;
+        if (s == null) return null;
+        String snip = s.get(objId);
+        return (snip == null || snip.isBlank()) ? null : snip;
+    }
+
     /** True while an AI (semantic/similar) result set is filtering the grid. */
     public boolean isSemanticActive() { return semanticMatchIds != null; }
     public String  getSemanticLabel() { return semanticLabel; }
@@ -1273,6 +1386,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         semanticMatchIds = null;
         semanticOrder    = null;
         semanticLabel    = null;
+        semanticSnippets = null;
         if (semanticBar != null) semanticBar.hideBar();
         applyFilters();
     }
@@ -1282,8 +1396,18 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         java.util.LinkedHashSet<Long> ids = new java.util.LinkedHashSet<>();
         java.util.List<Long> order = new java.util.ArrayList<>();
         for (var h : hits) { if (ids.add(h.fileId())) order.add(h.fileId()); }
+        setSemanticResult(ids, order, null, label); // visual search — no text snippets
+    }
+
+    /**
+     * Installs a ranked AI result set (visual and/or document) as the active grid
+     * filter. {@code snippets} is non-null only for document (text) searches.
+     */
+    private void setSemanticResult(java.util.Set<Long> ids, java.util.List<Long> order,
+                                   java.util.Map<Long, String> snippets, String label) {
         semanticMatchIds = ids;
         semanticOrder    = order;
+        semanticSnippets = snippets;
         semanticLabel    = label;
         if (semanticBar != null) semanticBar.showBar(label, ids.size());
         applyFilters();
@@ -1294,78 +1418,153 @@ public class EnhancedGalleryTopComponent extends TopComponent {
      * grid to the ranked results. Safe no-op path when the service/index is
      * unavailable — shows a message and leaves the normal view untouched.
      */
-    public void runSemanticSearch(String query, int topN) {
+    /**
+     * Runs an AI search against ONE index, chosen explicitly in the dialog:
+     * {@code textMode=false} → AI Image Triage (CLIP, visual phrasing);
+     * {@code textMode=true}  → AI Text Triage (BGE-M3, document text + OCR).
+     *
+     * The two indexes are phrased differently and (with OCR) a text search may
+     * return both document and image files, so the analyst picks the index rather
+     * than us inferring it from the type filter. The active filters and selected
+     * group still narrow the results (shown as "N hidden by filters" in the bar).
+     */
+    public void runSemanticSearch(String query, int topN, boolean textMode) {
         if (query == null || query.isBlank()) return;
-        final String idxDir = currentIndexDir();
+        final String q = query.trim();
+
+        final String idxDir = textMode ? currentTextIndexDir() : currentIndexDir();
         if (idxDir == null) {
             JOptionPane.showMessageDialog(this, "No case is open.",
                     "AI search", JOptionPane.WARNING_MESSAGE);
             return;
         }
+
         statusBar.startIndeterminate("Starting AI service / searching...");
         loaderPool.submit(() -> {
+            java.util.LinkedHashSet<Long> ids = new java.util.LinkedHashSet<>();
+            java.util.List<Long> order = new java.util.ArrayList<>();
+            java.util.Map<Long, String> snippets = new java.util.HashMap<>();
+            Exception[] fatal = { null };
+            boolean[]   handled = { false }; // a specific dialog was already chosen
+
             try {
-                var svc = org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.getInstance();
-                svc.ensureRunning();
-                var hits = svc.search(query.trim(), idxDir, topN);
-                SwingUtilities.invokeLater(() -> {
-                    statusBar.hideSpinner();
-                    if (hits.isEmpty()) {
-                        JOptionPane.showMessageDialog(this,
-                                "No matches for: " + query,
-                                "AI search", JOptionPane.INFORMATION_MESSAGE);
-                        return;
+                if (textMode) {
+                    var tsvc = org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.getInstance();
+                    tsvc.ensureRunning();
+                    for (var h : tsvc.search(q, idxDir, topN)) {
+                        if (ids.add(h.fileId())) order.add(h.fileId());
+                        if (h.snippet() != null && !h.snippet().isBlank())
+                            snippets.putIfAbsent(h.fileId(), h.snippet());
                     }
-                    applySemanticHits(hits, query.trim());
-                });
+                } else {
+                    var svc = org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.getInstance();
+                    svc.ensureRunning();
+                    for (var h : svc.search(q, idxDir, topN)) {
+                        if (ids.add(h.fileId())) order.add(h.fileId());
+                    }
+                }
             } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.ClipDisabledException ce) {
+                handled[0] = true;
                 SwingUtilities.invokeLater(() -> {
                     statusBar.hideSpinner();
                     JOptionPane.showMessageDialog(this,
-                            "Text search requires CLIP enabled in the AI service config\n"
-                            + "(config/clip_categories.json → \"enabled\": true) and the model downloaded.\n\n"
-                            + "\"Find similar\" (right-click a thumbnail) works without CLIP.",
+                            "Visual search requires CLIP enabled in the AI Image Triage service config\n"
+                            + "(config/clip_categories.json → \"enabled\": true) and the model downloaded.",
                             "CLIP not enabled", JOptionPane.WARNING_MESSAGE);
                 });
-            } catch (Exception ex) {
-                logger.log(Level.WARNING, "Semantic search failed", ex);
+            } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.EmbedderUnavailableException ee) {
+                handled[0] = true;
                 SwingUtilities.invokeLater(() -> {
                     statusBar.hideSpinner();
-                    showAiUnavailableDialog("AI search", ex);
+                    JOptionPane.showMessageDialog(this,
+                            "The AI Text Triage embedder has no model weights installed (stub).",
+                            "Text search unavailable", JOptionPane.WARNING_MESSAGE);
                 });
+            } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.IndexModelMismatchException me) {
+                handled[0] = true;
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    JOptionPane.showMessageDialog(this,
+                            "The text index was built with a different model — re-run "
+                            + "AI Text Triage ingest on this case.",
+                            "Text index mismatch", JOptionPane.WARNING_MESSAGE);
+                });
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, "AI search failed (textMode=" + textMode + ")", ex);
+                fatal[0] = ex;
             }
+
+            if (handled[0]) return;
+
+            final boolean hasResults = !order.isEmpty();
+            final String label = q;
+            final java.util.Map<Long, String> snipFinal = snippets.isEmpty() ? null : snippets;
+            SwingUtilities.invokeLater(() -> {
+                statusBar.hideSpinner();
+                if (hasResults) {
+                    setSemanticResult(ids, order, snipFinal, label);
+                } else if (fatal[0] != null) {
+                    if (textMode) showAiTextUnavailableDialog("Text search", fatal[0]);
+                    else          showAiUnavailableDialog("AI search", fatal[0]);
+                } else {
+                    JOptionPane.showMessageDialog(this,
+                            "No matches for: " + q,
+                            "AI search", JOptionPane.INFORMATION_MESSAGE);
+                }
+            });
         });
     }
 
     /**
-     * Shows the "AI Image Triage required" message when an AI feature can't reach
-     * a working service (module not installed / ingest not run / service down).
+     * Shows the "AI Image Triage required" message when a visual AI feature can't
+     * reach a working service (module not installed / ingest not run / service down).
      */
     private void showAiUnavailableDialog(String feature, Exception ex) {
+        showAiModuleUnavailableDialog(feature, "AI Image Triage",
+                "classifies images and builds a searchable CLIP index during ingest", ex);
+    }
+
+    /** Same as above but for the document (AI Text Triage / BGE-M3) modality. */
+    private void showAiTextUnavailableDialog(String feature, Exception ex) {
+        showAiModuleUnavailableDialog(feature, "AI Text Triage",
+                "extracts document text and builds a searchable BGE-M3 index during ingest", ex);
+    }
+
+    private void showAiModuleUnavailableDialog(String feature, String module, String whatItDoes, Exception ex) {
         String detail = (ex != null && ex.getMessage() != null) ? ex.getMessage() : "service not reachable";
         JOptionPane.showMessageDialog(this,
             "<html><body style='width:420px'>"
-            + "<b>" + feature + " is powered by the AI Image Triage module.</b><br><br>"
-            + "This feature needs the <b>AI Image Triage</b> companion module for Autopsy, "
-            + "which classifies images and builds a searchable CLIP index during ingest.<br><br>"
+            + "<b>" + feature + " is powered by the " + module + " module.</b><br><br>"
+            + "This feature needs the <b>" + module + "</b> companion module for Autopsy, "
+            + "which " + whatItDoes + ".<br><br>"
             + "To enable it:<br>"
-            + "&nbsp;&nbsp;1. Install the <b>AI Image Triage</b> module (.nbm) in Autopsy.<br>"
+            + "&nbsp;&nbsp;1. Install the <b>" + module + "</b> module (.nbm) in Autopsy.<br>"
             + "&nbsp;&nbsp;2. Run ingest with it on this case (it builds the AI index).<br><br>"
-            + "Then AI search and “Find similar” will work here.<br><br>"
+            + "Then this feature will work here.<br><br>"
             + "<font color='gray' size='2'>Details: " + escapeHtml(detail) + "</font>"
             + "</body></html>",
-            "AI Image Triage required", JOptionPane.INFORMATION_MESSAGE);
+            module + " required", JOptionPane.INFORMATION_MESSAGE);
     }
 
-    /** Runs a visual-similarity lookup for the file at the given visible index. */
+    /**
+     * Runs a similarity lookup for the file at the given visible index, routed by
+     * the file's type: DOCUMENT → AI Text Triage (BGE-M3, /similar on 8757, with
+     * snippets); everything else → AI Image Triage (CLIP, /similar on 8756).
+     */
     public void runFindSimilar(int visibleIdx) {
         if (visibleIdx < 0 || visibleIdx >= visible.size()) return;
         final MediaFile mf = visible.get(visibleIdx);
         final long fileId  = mf.getId();
         final String label = mf.getName();
+        final boolean isDoc = mf.getMediaType() == MediaFile.MediaType.DOCUMENT;
+
+        if (isDoc) {
+            runFindSimilarDocuments(fileId, label);
+            return;
+        }
+
         final String idxDir = currentIndexDir();
         if (idxDir == null) return;
-
         statusBar.startIndeterminate("Starting AI service / finding similar...");
         loaderPool.submit(() -> {
             try {
@@ -1387,6 +1586,53 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 SwingUtilities.invokeLater(() -> {
                     statusBar.hideSpinner();
                     showAiUnavailableDialog("Find similar", ex);
+                });
+            }
+        });
+    }
+
+    /** Document similarity via AI Text Triage (/similar on 8757), keeping snippets. */
+    private void runFindSimilarDocuments(long fileId, String label) {
+        final String txtIdx = currentTextIndexDir();
+        if (txtIdx == null) return;
+        statusBar.startIndeterminate("Starting AI text service / finding similar documents...");
+        loaderPool.submit(() -> {
+            try {
+                var tsvc = org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.getInstance();
+                tsvc.ensureRunning();
+                var hits = tsvc.similar(fileId, txtIdx, 50);
+                java.util.LinkedHashSet<Long> ids = new java.util.LinkedHashSet<>();
+                java.util.List<Long> order = new java.util.ArrayList<>();
+                java.util.Map<Long, String> snippets = new java.util.HashMap<>();
+                for (var h : hits) {
+                    if (ids.add(h.fileId())) order.add(h.fileId());
+                    if (h.snippet() != null && !h.snippet().isBlank())
+                        snippets.putIfAbsent(h.fileId(), h.snippet());
+                }
+                final java.util.Map<Long, String> snipFinal = snippets.isEmpty() ? null : snippets;
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    if (order.isEmpty()) {
+                        JOptionPane.showMessageDialog(this,
+                                "No similar documents found (is this file in the text index?).",
+                                "Find similar", JOptionPane.INFORMATION_MESSAGE);
+                        return;
+                    }
+                    setSemanticResult(ids, order, snipFinal, "similar to " + label);
+                });
+            } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.IndexModelMismatchException me) {
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    JOptionPane.showMessageDialog(this,
+                            "The text index was built with a different model — re-run "
+                            + "AI Text Triage ingest on this case.",
+                            "Find similar", JOptionPane.WARNING_MESSAGE);
+                });
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, "Document find-similar failed", ex);
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    showAiTextUnavailableDialog("Find similar documents", ex);
                 });
             }
         });
@@ -1474,15 +1720,20 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     private void rebuildSidebar() {
         final Long   dsId  = activeDataSourceId;
         final String grpBy = groupBy;
+        // Snapshot the active type filter so the sidebar groups (MIME, extension, …)
+        // only reflect the types currently shown in the grid — otherwise document
+        // MIME/extension groups would clutter the panel even for image-only analysts.
+        final Set<String> ty = new HashSet<>(typeFilters);
         if (rebuildOverlay != null) rebuildOverlay.showOverlay();
         groupSidebar.captureScrollPosition();
         rebuildPool.submit(() -> {
             List<MediaFile> snap;
             synchronized (allFiles) { snap = new ArrayList<>(allFiles); }
-            List<MediaFile> forSidebar = dsId == null ? snap
-                    : snap.stream()
-                        .filter(mf -> mf.getAbstractFile().getDataSourceObjectId() == dsId)
-                        .collect(java.util.stream.Collectors.toList());
+            List<MediaFile> forSidebar = snap.stream()
+                    .filter(mf -> dsId == null
+                               || mf.getAbstractFile().getDataSourceObjectId() == dsId)
+                    .filter(mf -> ty.contains(mf.getMediaType().name().toLowerCase()))
+                    .collect(java.util.stream.Collectors.toList());
             groupSidebar.rebuild(forSidebar, grpBy, () -> {
                 if (rebuildOverlay != null) SwingUtilities.invokeLater(rebuildOverlay::hideOverlay);
             });
@@ -1650,6 +1901,123 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                             "Open Error", JOptionPane.ERROR_MESSAGE));
             }
         });
+    }
+
+    /**
+     * Extracts the selected files (or the right-clicked one if nothing is selected)
+     * to a folder chosen by the analyst — the Enhanced Gallery equivalent of
+     * Autopsy's "Extract File(s)". Writes the ORIGINAL bytes (not thumbnails) via
+     * AbstractFile.read, so it works for every source type without an extra module
+     * dependency. Runs the copy off the EDT and reports a summary when done.
+     *
+     * @param rightClickedIdx visible index of the file under the cursor (used as the
+     *                        target when the selection is empty)
+     */
+    public void exportFiles(int rightClickedIdx) {
+        // Resolve the target files on the EDT (indices → MediaFile), snapshotting now.
+        java.util.List<MediaFile> targets = new ArrayList<>();
+        if (!selected.isEmpty()) {
+            java.util.List<Integer> idxs = new ArrayList<>(selected);
+            java.util.Collections.sort(idxs);
+            for (int i : idxs) if (i >= 0 && i < visible.size()) targets.add(visible.get(i));
+        } else if (rightClickedIdx >= 0 && rightClickedIdx < visible.size()) {
+            targets.add(visible.get(rightClickedIdx));
+        }
+        if (targets.isEmpty()) return;
+
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        chooser.setDialogTitle("Save " + targets.size()
+                + (targets.size() == 1 ? " file to folder" : " files to folder"));
+        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
+        final java.io.File destDir = chooser.getSelectedFile();
+        if (destDir == null) return;
+
+        final java.util.List<MediaFile> toExport = targets;
+        statusBar.startIndeterminate("Exporting " + toExport.size() + " file(s)…");
+        loaderPool.submit(() -> {
+            int ok = 0, fail = 0;
+            java.util.List<String> errors = new ArrayList<>();
+            try { java.nio.file.Files.createDirectories(destDir.toPath()); } catch (Exception ignored) {}
+
+            for (MediaFile mf : toExport) {
+                try {
+                    java.io.File out = uniqueDestFile(destDir, mf.getId(), mf.getName());
+                    writeFileBytes(mf.getAbstractFile(), out);
+                    ok++;
+                } catch (Exception ex) {
+                    fail++;
+                    errors.add(mf.getName() + " — " + (ex.getMessage() != null ? ex.getMessage() : ex));
+                    logger.log(Level.WARNING, "Export failed for " + mf.getName(), ex);
+                }
+            }
+
+            final int okF = ok, failF = fail;
+            final java.util.List<String> errF = errors;
+            SwingUtilities.invokeLater(() -> {
+                statusBar.hideSpinner();
+                StringBuilder msg = new StringBuilder();
+                msg.append("Exported ").append(okF).append(" file(s) to:\n")
+                   .append(destDir.getAbsolutePath());
+                if (failF > 0) {
+                    msg.append("\n\nFailed: ").append(failF).append(" file(s).");
+                    int show = Math.min(errF.size(), 8);
+                    for (int i = 0; i < show; i++) msg.append("\n  • ").append(errF.get(i));
+                    if (errF.size() > show) msg.append("\n  … and ").append(errF.size() - show).append(" more");
+                }
+                JOptionPane.showMessageDialog(this, msg.toString(),
+                        "Export " + (failF == 0 ? "complete" : "finished with errors"),
+                        failF == 0 ? JOptionPane.INFORMATION_MESSAGE : JOptionPane.WARNING_MESSAGE);
+                // Best-effort: reveal the folder in the OS file manager.
+                if (okF > 0) {
+                    try { java.awt.Desktop.getDesktop().open(destDir); } catch (Exception ignored) {}
+                }
+            });
+        });
+    }
+
+    /** Streams an AbstractFile's raw content to {@code out} (same read loop as thumbnail extraction). */
+    private static void writeFileBytes(org.sleuthkit.datamodel.AbstractFile f, java.io.File out)
+            throws java.io.IOException {
+        byte[] buf = new byte[65536];
+        long offset = 0, remaining = f.getSize();
+        try (java.io.OutputStream os = java.nio.file.Files.newOutputStream(out.toPath())) {
+            while (remaining > 0) {
+                int toRead = (int) Math.min(buf.length, remaining);
+                int read;
+                try { read = f.read(buf, offset, toRead); }
+                catch (org.sleuthkit.datamodel.TskCoreException te) { throw new java.io.IOException(te); }
+                if (read <= 0) break;
+                os.write(buf, 0, read);
+                offset    += read;
+                remaining -= read;
+            }
+        }
+    }
+
+    /**
+     * Returns a destination file in {@code dir} named {@code <objId>_<name>}: the
+     * Autopsy obj_id is unique per file across the whole case, so this guarantees no
+     * two exported files ever collide (even when they share the same evidence name
+     * from different folders/data sources) AND keeps each file traceable back to its
+     * source. Characters invalid on the OS are sanitised; a numeric suffix is only a
+     * defensive last resort (should never trigger in practice).
+     */
+    private static java.io.File uniqueDestFile(java.io.File dir, long objId, String rawName) {
+        String name = (rawName == null || rawName.isBlank()) ? "file" : rawName.trim();
+        name = name.replaceAll("[\\\\/:*?\"<>|\\x00-\\x1F]", "_");
+        String prefixed = objId + "_" + name;
+        java.io.File candidate = new java.io.File(dir, prefixed);
+        if (!candidate.exists()) return candidate;
+
+        String base = prefixed, ext = "";
+        int dot = prefixed.lastIndexOf('.');
+        if (dot > 0) { base = prefixed.substring(0, dot); ext = prefixed.substring(dot); }
+        for (int i = 1; i < 100000; i++) {
+            java.io.File c = new java.io.File(dir, base + " (" + i + ")" + ext);
+            if (!c.exists()) return c;
+        }
+        return new java.io.File(dir, base + "_" + System.nanoTime() + ext);
     }
 
     public void jumpToFirstUnseen() {

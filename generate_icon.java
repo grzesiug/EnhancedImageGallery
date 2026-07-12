@@ -5,7 +5,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 
 /**
- * Generates gallery.png icon (32x32) for Enhanced Image Gallery module.
+ * Generates gallery.png icon (32x32) for Enhanced Evidence Gallery module.
  * Run: java generate_icon.java
  * Output: src/org/sleuthkit/autopsy/enhancedgallery/resources/gallery.png
  */

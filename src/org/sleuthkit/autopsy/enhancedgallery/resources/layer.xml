@@ -24,7 +24,7 @@
                 <attr name="delegate"
                       newvalue="org.sleuthkit.autopsy.enhancedgallery.ui.OpenGalleryAction"/>
                 <attr name="displayName"
-                      stringvalue="Enhanced Image Gallery"/>
+                      stringvalue="Enhanced Evidence Gallery"/>
             </file>
         </folder>
         <folder name="Window">
@@ -35,9 +35,9 @@
                 <attr name="delegate"
                       newvalue="org.sleuthkit.autopsy.enhancedgallery.ui.OpenGalleryAction"/>
                 <attr name="displayName"
-                      stringvalue="Enhanced Image Gallery"/>
+                      stringvalue="Enhanced Evidence Gallery"/>
                 <attr name="shortDescription"
-                      stringvalue="Enhanced Image Gallery — open gallery viewer"/>
+                      stringvalue="Enhanced Evidence Gallery — open gallery viewer"/>
                 <attr name="iconBase"
                       stringvalue="org/sleuthkit/autopsy/enhancedgallery/resources/gallery.png"/>
             </file>

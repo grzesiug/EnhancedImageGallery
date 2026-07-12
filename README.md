@@ -1,4 +1,4 @@
-# Enhanced Image Gallery — Autopsy Forensic Module
+# Enhanced Evidence Gallery — Autopsy Forensic Module
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE-2.0.txt)
 [![Autopsy](https://img.shields.io/badge/Autopsy-4.23.1-green.svg)](https://www.autopsy.com/)
@@ -85,14 +85,14 @@ An extended media gallery plugin for [Autopsy® Digital Forensics Platform](http
 1. Download the latest `.nbm` file from [Releases](../../releases)
 2. In Autopsy: **Tools → Plugins → Downloaded → Add Plugins…**
 3. Select the `.nbm` file → **Install** → **Restart Autopsy**
-4. Open: **Tools → Enhanced Image Gallery** or use the toolbar button
+4. Open: **Tools → Enhanced Evidence Gallery** or use the toolbar button
 
 ---
 
 ## Usage
 
 1. Open a case in Autopsy
-2. Launch Enhanced Image Gallery from **Tools** menu or toolbar icon
+2. Launch Enhanced Evidence Gallery from **Tools** menu or toolbar icon
 3. Configure external tools in **⚙ Settings → Auto-detect all**
 4. Browse files — use **Group by** to organize, filters to focus on what matters
 5. Click thumbnails to select, double-click to open in external viewer

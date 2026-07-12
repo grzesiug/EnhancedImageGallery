@@ -115,9 +115,10 @@ public class GalleryFileLoader {
                 if (!mt.isSupported()) continue;
 
                 MediaFile.MediaType mfType = switch (mt) {
-                    case IMAGE -> MediaFile.MediaType.IMAGE;
-                    case VIDEO -> MediaFile.MediaType.VIDEO;
-                    default    -> MediaFile.MediaType.AUDIO;
+                    case IMAGE    -> MediaFile.MediaType.IMAGE;
+                    case VIDEO    -> MediaFile.MediaType.VIDEO;
+                    case DOCUMENT -> MediaFile.MediaType.DOCUMENT;
+                    default       -> MediaFile.MediaType.AUDIO;
                 };
                 MediaFile mf = new MediaFile(af, mfType);
 
@@ -147,6 +148,90 @@ public class GalleryFileLoader {
         } finally {
             onDone.run();
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // On-demand document loading (option b)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Loads DOCUMENT files only. Called lazily the first time the user enables the
+     * "Documents" filter, so pure-image analysts never pay the cost of pulling
+     * (potentially very many) document files into memory. Mirrors {@link #load}
+     * but restricted to the document MIME set, with no type-ID diagnostic.
+     *
+     * @param onBatch receives each batch (called on the loader thread — wrap with SwingUtilities)
+     * @param onDone  called once when loading is finished (or cancelled)
+     */
+    public void loadDocuments(Consumer<List<MediaFile>> onBatch, Runnable onDone) {
+        try {
+            SleuthkitCase db = Case.getCurrentCaseThrows().getSleuthkitCase();
+            List<AbstractFile> rawFiles = queryDocumentFiles(db);
+            logger.log(Level.INFO,
+                    "GalleryFileLoader: found {0} candidate document files",
+                    rawFiles.size());
+
+            Map<Long, ReviewStateStore.SavedState> savedStates;
+            try { savedStates = reviewStore.loadAll(); }
+            catch (Exception e) { savedStates = new java.util.HashMap<>(); }
+
+            List<MediaFile> batch = new ArrayList<>(BATCH_SIZE);
+            for (AbstractFile af : rawFiles) {
+                if (cancelled) break;
+                if (af.isDir() || af.isVirtual()) continue;
+                if (af.getSize() == 0) continue;
+
+                MediaType mt = MediaType.fromFile(af.getMIMEType(), af.getName());
+                if (mt != MediaType.DOCUMENT) continue;
+
+                MediaFile mf = new MediaFile(af, MediaFile.MediaType.DOCUMENT);
+                ReviewStateStore.SavedState saved = savedStates.get(af.getId());
+                if (saved != null) {
+                    mf.setReviewState(saved.state);
+                    if (saved.tagName != null) mf.setTagName(saved.tagName);
+                }
+
+                batch.add(mf);
+                if (batch.size() >= BATCH_SIZE) {
+                    onBatch.accept(new ArrayList<>(batch));
+                    batch.clear();
+                }
+            }
+            if (!batch.isEmpty()) onBatch.accept(batch);
+
+        } catch (NoCurrentCaseException ex) {
+            logger.log(Level.WARNING, "No case open during document load", ex);
+        } catch (TskCoreException ex) {
+            logger.log(Level.SEVERE, "Error querying document files from case", ex);
+        } finally {
+            onDone.run();
+        }
+    }
+
+    /** Files whose MIME type is in the recognised document set (MIME-only, like media). */
+    private List<AbstractFile> queryDocumentFiles(SleuthkitCase db)
+            throws TskCoreException {
+
+        StringBuilder in = new StringBuilder();
+        for (String mime : MediaType.documentMimes()) {
+            if (in.length() > 0) in.append(", ");
+            in.append('\'').append(mime.replace("'", "''")).append('\'');
+        }
+
+        int regMeta = TskData.TSK_FS_META_TYPE_ENUM.TSK_FS_META_TYPE_REG.getValue();
+        int regName = TskData.TSK_FS_NAME_TYPE_ENUM.REG.getValue();
+
+        String where = "mime_type IN (" + in + ")"
+                + " AND (meta_type = " + regMeta + " OR dir_type = " + regName + ")"
+                + " AND size > 0";
+
+        if (org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.isExcludeKnown()) {
+            where += " AND (known IS NULL OR known != 1)";
+        }
+
+        logger.log(Level.INFO, "GalleryFileLoader document query (excludeKnown={0}): {1}",
+                new Object[]{GallerySettings.isExcludeKnown(), where});
+        return db.findAllFilesWhere(where);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -184,10 +269,17 @@ public class GalleryFileLoader {
     private List<AbstractFile> queryAllMediaFiles(SleuthkitCase db)
             throws TskCoreException {
 
+        // MIME-based inclusion (image/video/audio). SVG is the one deliberate
+        // exception matched by extension: File Type Identification sometimes reports
+        // it as text/xml (it's XML under the hood), which would otherwise route it to
+        // the document path — but SVG is a graphic and should render a Batik preview.
+        // See MediaType.fromFile, which classifies .svg/.svgz as IMAGE regardless of MIME.
         String mimeWhere = """
             (mime_type LIKE 'image/%'
              OR mime_type LIKE 'video/%'
-             OR mime_type LIKE 'audio/%')
+             OR mime_type LIKE 'audio/%'
+             OR LOWER(name) LIKE '%.svg'
+             OR LOWER(name) LIKE '%.svgz')
             """;
 
         int regMeta = TskData.TSK_FS_META_TYPE_ENUM.TSK_FS_META_TYPE_REG.getValue();

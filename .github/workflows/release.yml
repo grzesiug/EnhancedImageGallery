@@ -53,9 +53,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Enhanced Image Gallery ${{ github.ref_name }}"
+          name: "Enhanced Evidence Gallery ${{ github.ref_name }}"
           body: |
-            ## Enhanced Image Gallery ${{ github.ref_name }}
+            ## Enhanced Evidence Gallery ${{ github.ref_name }}
 
             ### Installation
             1. Download `${{ steps.find_nbm.outputs.NBM_NAME }}` below

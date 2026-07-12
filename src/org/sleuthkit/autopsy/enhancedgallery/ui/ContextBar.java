@@ -59,9 +59,13 @@ public class ContextBar extends JPanel {
         progress.setBorderPainted(false);
         progress.setForeground(new Color(0x2563EB));
 
+        // SPISCOM logo pinned to the top-right, just after the counter/progress.
+        SpiscomLogo logo = new SpiscomLogo(24);
+        logo.setToolTipText("SPISCOM");
+
         JPanel countPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         countPanel.setOpaque(false);
-        countPanel.add(countLabel); countPanel.add(progress);
+        countPanel.add(countLabel); countPanel.add(progress); countPanel.add(logo);
 
         row1.add(sourcePanel, BorderLayout.WEST);
         row1.add(countPanel,  BorderLayout.EAST);

@@ -167,6 +167,27 @@ public class ThumbnailGrid extends JScrollPane {
             };
             addMouseListener(ma);
             addMouseMotionListener(ma);
+            // Enable per-tile tooltips (used to show the matched-text snippet of a document hit)
+            javax.swing.ToolTipManager.sharedInstance().registerComponent(this);
+        }
+
+        /**
+         * Tooltip shows the matched-text snippet for a document hit during an AI
+         * text search. Returns null (no tooltip) otherwise, to keep image hover clean.
+         */
+        @Override
+        public String getToolTipText(MouseEvent e) {
+            int idx = indexAt(e.getX(), e.getY());
+            if (idx < 0 || idx >= files.size()) return null;
+            MediaFile mf = files.get(idx);
+            String snip = parent.getSemanticSnippet(mf.getId());
+            if (snip == null) return null;
+            return "<html><body style='width:320px'><b>" + escapeHtml(mf.getName())
+                    + "</b><br>…" + escapeHtml(snip) + "…</body></html>";
+        }
+
+        private String escapeHtml(String s) {
+            return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
         }
 
         private int cols() {
@@ -226,10 +247,15 @@ public class ThumbnailGrid extends JScrollPane {
             JPopupMenu m = new JPopupMenu();
             boolean multi = parent.getSelected().size() > 1;
 
-            JMenuItem similar = new JMenuItem("Find similar images", new AiSearchIcon(14));
+            boolean isDoc = idx >= 0 && idx < files.size()
+                    && files.get(idx).getMediaType() == MediaFile.MediaType.DOCUMENT;
+            JMenuItem similar = new JMenuItem(
+                    isDoc ? "Find similar documents" : "Find similar images", new AiSearchIcon(14));
             similar.setToolTipText(multi
-                    ? "Select a single image to find similar ones"
-                    : "Find visually similar images using the AI Image Triage index");
+                    ? "Select a single file to find similar ones"
+                    : isDoc
+                        ? "Find documents with similar text using the AI Text Triage index"
+                        : "Find visually similar images using the AI Image Triage index");
             similar.setEnabled(!multi); // single-file action
             similar.addActionListener(ev -> parent.runFindSimilar(idx));
             m.add(similar);
@@ -239,20 +265,35 @@ public class ThumbnailGrid extends JScrollPane {
             open.addActionListener(ev -> parent.openFileExternally(idx));
             m.add(open);
 
+            int selCount = parent.getSelected().size();
+            JMenuItem export = new JMenuItem(selCount > 1
+                    ? "Save " + selCount + " files to disk…" : "Save to disk…");
+            export.setToolTipText("Extract the selected file(s) to a folder on disk (original bytes)");
+            export.addActionListener(ev -> parent.exportFiles(idx));
+            m.add(export);
+
             m.addSeparator();
             JMenu tagMenu = new JMenu("Tag");
             tagMenu.setIcon(new TagIcon(14));
-            // Same grouping/sorting as the top Tag ▾ button: custom tags
-            // (alphabetical) first, built-in standard tags in a group at the end.
+            // Same grouping/sorting as the top Tag ▾ button: automated AI tags first
+            // (blue), then custom tags, built-in standard tags, then child-exploitation.
+            java.util.List<String> aiTags    = parent.aiTagsSorted();
             java.util.List<String> custom     = parent.customTagsSorted();
             java.util.List<String> predefined = parent.predefinedTagsSorted();
             java.util.List<String> childExpl  = parent.childExploitationTagsSorted();
+            for (String tag : aiTags) {
+                JMenuItem ti = new JMenuItem(tag);
+                ti.setForeground(EnhancedGalleryTopComponent.AI_TAG_COLOR);
+                ti.addActionListener(ev -> parent.applyTag(tag));
+                tagMenu.add(ti);
+            }
+            if (!aiTags.isEmpty() && !custom.isEmpty()) tagMenu.addSeparator();
             for (String tag : custom) {
                 JMenuItem ti = new JMenuItem(tag);
                 ti.addActionListener(ev -> parent.applyTag(tag));
                 tagMenu.add(ti);
             }
-            if (!custom.isEmpty() && !predefined.isEmpty()) tagMenu.addSeparator();
+            if ((!aiTags.isEmpty() || !custom.isEmpty()) && !predefined.isEmpty()) tagMenu.addSeparator();
             for (String tag : predefined) {
                 JMenuItem ti = new JMenuItem(tag);
                 ti.addActionListener(ev -> parent.applyTag(tag));
@@ -613,9 +654,10 @@ public class ThumbnailGrid extends JScrollPane {
 
         private Color formatColor(MediaFile.MediaType t) {
             return switch(t) {
-                case IMAGE -> new Color(0x534AB7);
-                case VIDEO -> new Color(0x7F77DD);
-                case AUDIO -> new Color(0x0f6e56);
+                case IMAGE    -> new Color(0x534AB7);
+                case VIDEO    -> new Color(0x7F77DD);
+                case AUDIO    -> new Color(0x0f6e56);
+                case DOCUMENT -> new Color(0x8a5a2b);
             };
         }
 

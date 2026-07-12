@@ -36,7 +36,7 @@ import org.openide.windows.WindowManager;
     )
 })
 @NbBundle.Messages({
-    "OpenEnhancedGalleryAction.name=Enhanced Image Gallery",
+    "OpenEnhancedGalleryAction.name=Enhanced Evidence Gallery",
     "OpenEnhancedGalleryAction.tooltip=Open Enhanced Image / Video / Audio Gallery"
 })
 public final class OpenEnhancedGalleryAction implements ActionListener {

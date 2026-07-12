@@ -48,7 +48,7 @@ public class OpenGalleryAction implements ActionListener {
         TopComponent tc = EnhancedGalleryTopComponent.findInstance();
 
         // Build a standalone JFrame
-        galleryFrame = new JFrame("Enhanced Image Gallery");
+        galleryFrame = new JFrame("Enhanced Evidence Gallery");
         galleryFrame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         galleryFrame.setLayout(new BorderLayout());
         galleryFrame.add(tc, BorderLayout.CENTER);
@@ -75,6 +75,11 @@ public class OpenGalleryAction implements ActionListener {
                 // if it was never used or is owned by an active ingest)
                 try {
                     org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService
+                            .getInstance().stopIfOwned();
+                } catch (Exception ignored) {}
+                // Same for the AI Text Triage service (document search), if we launched it
+                try {
+                    org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService
                             .getInstance().stopIfOwned();
                 } catch (Exception ignored) {}
                 // Return TC to NB so it can be opened again later
