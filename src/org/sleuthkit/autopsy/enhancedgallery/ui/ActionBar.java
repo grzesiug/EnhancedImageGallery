@@ -44,7 +44,9 @@ public class ActionBar extends JPanel {
     private final JButton markGroupSeenBtn = new JButton("Mark group seen");
 
     // File name search (within current group/filter)
-    private final JTextField searchField = new JTextField(14);
+    private final JComboBox<String> searchBox = new JComboBox<>();
+    private final JTextField searchField = (JTextField) searchBox.getEditor().getEditorComponent();
+    private final java.util.List<String> fileSearchHistory = new java.util.ArrayList<>();
     private final javax.swing.Timer searchDebounce = new javax.swing.Timer(250, null);
 
     public ActionBar(EnhancedGalleryTopComponent parent) {
@@ -112,15 +114,34 @@ public class ActionBar extends JPanel {
         sizePanel.add(lbl("Size:")); sizePanel.add(sizeSlider); sizePanel.add(sizeLabel);
 
         // ── File name search ─────────────────────────────────────────────────
+        searchBox.setEditable(true);
+        searchField.setColumns(14);
         searchField.setFont(searchField.getFont().deriveFont(12f));
-        searchField.setToolTipText("<html><b>Search files</b> — filters the currently visible "
-                + "group/filter by file name (case-insensitive, substring match).</html>");
+        String searchTip = "<html><b>Search files</b> — filters the currently visible "
+                + "group/filter by file name.<br>"
+                + "Case-insensitive substring. Multiple phrases with <b>|</b> match ANY "
+                + "(e.g. <tt>img1|img2</tt>).<br>"
+                + "Enter remembers the query (last " + org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.RECENT_FILTER_MAX
+                + "); ▾ picks a recent one.</html>";
+        searchBox.setToolTipText(searchTip);
+        searchField.setToolTipText(searchTip);
+        reloadFileSearchHistory();
+        installPrefixAutocomplete(searchField, fileSearchHistory);
         searchDebounce.setRepeats(false);
         searchDebounce.addActionListener(e -> parent.setSearchText(searchField.getText()));
         searchField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
             @Override public void insertUpdate(javax.swing.event.DocumentEvent e)  { searchDebounce.restart(); }
             @Override public void removeUpdate(javax.swing.event.DocumentEvent e)  { searchDebounce.restart(); }
             @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { searchDebounce.restart(); }
+        });
+        // Enter → remember the query in history (live filtering already happens via debounce).
+        searchField.addActionListener(e -> {
+            String t = searchField.getText().trim();
+            if (!t.isEmpty()) {
+                org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.addRecentFileSearch(t);
+                reloadFileSearchHistory();
+            }
+            parent.setSearchText(searchField.getText());
         });
         JButton searchClearBtn = new JButton("✕");
         searchClearBtn.setMargin(new Insets(0, 4, 0, 4));
@@ -142,7 +163,7 @@ public class ActionBar extends JPanel {
 
         JPanel searchPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 3, 0));
         searchPanel.setOpaque(false);
-        searchPanel.add(lbl("🔍")); searchPanel.add(searchField); searchPanel.add(searchClearBtn);
+        searchPanel.add(lbl("🔍")); searchPanel.add(searchBox); searchPanel.add(searchClearBtn);
         searchPanel.add(aiSearchBtn);
 
         // ── Tag dropdown ──────────────────────────────────────────────────────
@@ -495,8 +516,20 @@ public class ActionBar extends JPanel {
      * query starts with what was typed, the remainder is appended and selected so
      * the next keystroke overwrites it (Backspace/Delete never re-complete).
      */
-    private static void installPrefixAutocomplete(JTextField editor, java.util.List<String> recent) {
-        if (recent.isEmpty()) return;
+    /** Refreshes the file-search dropdown model + backing history list, keeping editor text. */
+    private void reloadFileSearchHistory() {
+        String cur = searchField.getText();
+        fileSearchHistory.clear();
+        fileSearchHistory.addAll(
+                org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.getRecentFileSearches());
+        searchBox.setModel(new DefaultComboBoxModel<>(fileSearchHistory.toArray(new String[0])));
+        searchBox.setSelectedIndex(-1);
+        searchField.setText(cur); // setModel may reset the editor — restore what the user had
+    }
+
+    static void installPrefixAutocomplete(JTextField editor, java.util.List<String> recent) {
+        // 'recent' may be a live list that grows during the session — check it per
+        // keystroke rather than bailing out when it happens to be empty right now.
         editor.addKeyListener(new java.awt.event.KeyAdapter() {
             @Override public void keyReleased(java.awt.event.KeyEvent e) {
                 int k = e.getKeyCode();

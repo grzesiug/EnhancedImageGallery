@@ -597,8 +597,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         final boolean broken = showBrokenOnly;
         final String  grpBy  = groupBy;
         final GpsCache gps   = gpsCache;
-        final String  search = (searchText == null || searchText.isBlank())
-                ? null : searchText.trim().toLowerCase();
+        // File-name search: pipe-separated terms, OR-matched (e.g. img1|img2).
+        final java.util.List<String> searchTerms = SearchTerms.parse(searchText);
         final java.util.Set<Long>  semIds   = semanticMatchIds; // null = no AI filter
         final java.util.List<Long> semOrder = semanticOrder;
         // Consume the view-reset flag (set by source/group/filter changes).
@@ -620,7 +620,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 .filter(mf -> grpKey == null || matchesGroupKey(mf, grpKey, grpBy))
                 .filter(mf -> mf.matchesFilters(st, ty, geo, gps))
                 .filter(mf -> !broken || mf.isThumbnailFailed())
-                .filter(mf -> search == null || mf.getName().toLowerCase().contains(search))
+                .filter(mf -> SearchTerms.matchesAny(mf.getName().toLowerCase(), searchTerms))
                 // Semantic filter — no-op unless an AI search is active (semIds != null)
                 .filter(mf -> semIds == null || semIds.contains(mf.getId()))
                 .collect(java.util.stream.Collectors.toList());

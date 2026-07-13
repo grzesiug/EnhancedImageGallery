@@ -9,6 +9,7 @@ import javax.swing.border.EmptyBorder;
 import javax.swing.border.MatteBorder;
 import org.sleuthkit.autopsy.enhancedgallery.datamodel.GroupKeyHelper;
 import org.sleuthkit.autopsy.enhancedgallery.datamodel.MediaFile;
+import org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings;
 
 /**
  * Left sidebar: list of groups with file counts + sort controls.
@@ -43,7 +44,9 @@ public class GroupSidebar extends JPanel {
     // Cached entries for re-sorting without re-building
     private List<GroupEntry> lastEntries = new ArrayList<>();
     private volatile String groupFilterText = null; // case-insensitive substring filter on group name
-    private final JTextField groupSearchField = new JTextField();
+    private final JComboBox<String> groupSearchBox = new JComboBox<>();
+    private final JTextField groupSearchField = (JTextField) groupSearchBox.getEditor().getEditorComponent();
+    private final java.util.List<String> groupSearchHistory = new java.util.ArrayList<>();
     private final javax.swing.Timer groupSearchDebounce = new javax.swing.Timer(250, null);
 
     record GroupEntry(String key, String display, int total, int unseen) {}
@@ -75,12 +78,20 @@ public class GroupSidebar extends JPanel {
         sortBar.add(new JLabel("Sort:"));
         sortBar.add(btnName); sortBar.add(btnCount); sortBar.add(btnUnseen);
 
-        // Group filter (search box)
+        // Group filter (search box) — editable combo with history + multi-phrase OR
+        groupSearchBox.setEditable(true);
         groupSearchField.setFont(groupSearchField.getFont().deriveFont(12f));
-        groupSearchField.setToolTipText("Filter the group list by name (case-insensitive)");
+        String groupTip = "<html><b>Filter groups</b> by name (case-insensitive).<br>"
+                + "Multiple phrases with <b>|</b> match ANY (e.g. <tt>2023|2024</tt>).<br>"
+                + "Enter remembers the query (last " + GallerySettings.RECENT_FILTER_MAX
+                + "); ▾ picks a recent one.</html>";
+        groupSearchBox.setToolTipText(groupTip);
+        groupSearchField.setToolTipText(groupTip);
         groupSearchField.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(new Color(0xC5C8DC)),
                 new EmptyBorder(2, 4, 2, 4)));
+        reloadGroupSearchHistory();
+        ActionBar.installPrefixAutocomplete(groupSearchField, groupSearchHistory);
         groupSearchDebounce.setRepeats(false);
         groupSearchDebounce.addActionListener(e -> {
             groupFilterText = groupSearchField.getText();
@@ -90,6 +101,16 @@ public class GroupSidebar extends JPanel {
             @Override public void insertUpdate(javax.swing.event.DocumentEvent e)  { groupSearchDebounce.restart(); }
             @Override public void removeUpdate(javax.swing.event.DocumentEvent e)  { groupSearchDebounce.restart(); }
             @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { groupSearchDebounce.restart(); }
+        });
+        // Enter → remember the query (live filtering already happens via debounce).
+        groupSearchField.addActionListener(e -> {
+            String t = groupSearchField.getText().trim();
+            if (!t.isEmpty()) {
+                GallerySettings.addRecentGroupSearch(t);
+                reloadGroupSearchHistory();
+            }
+            groupFilterText = groupSearchField.getText();
+            reapplyFilterAndSort();
         });
         JButton groupSearchClear = new JButton("✕");
         groupSearchClear.setMargin(new Insets(0, 3, 0, 3));
@@ -103,7 +124,7 @@ public class GroupSidebar extends JPanel {
         JPanel searchBar = new JPanel(new BorderLayout(3, 0));
         searchBar.setOpaque(false);
         searchBar.setBorder(new EmptyBorder(2, 6, 2, 6));
-        searchBar.add(groupSearchField, BorderLayout.CENTER);
+        searchBar.add(groupSearchBox, BorderLayout.CENTER);
         searchBar.add(groupSearchClear, BorderLayout.EAST);
 
         JPanel northPanel = new JPanel(new BorderLayout());
@@ -133,15 +154,25 @@ public class GroupSidebar extends JPanel {
         add(scroll,     BorderLayout.CENTER);
     }
 
+    /** Refreshes the group-search dropdown model + backing history list, keeping editor text. */
+    private void reloadGroupSearchHistory() {
+        String cur = groupSearchField.getText();
+        groupSearchHistory.clear();
+        groupSearchHistory.addAll(GallerySettings.getRecentGroupSearches());
+        groupSearchBox.setModel(new DefaultComboBoxModel<>(groupSearchHistory.toArray(new String[0])));
+        groupSearchBox.setSelectedIndex(-1);
+        groupSearchField.setText(cur); // setModel may reset the editor — restore what the user had
+    }
+
     // ── Group filter ──────────────────────────────────────────────────────────
 
     /** Keeps "All files" entry always visible; filters the rest by display name substring. */
     private List<GroupEntry> filtered(List<GroupEntry> entries) {
-        if (groupFilterText == null || groupFilterText.isBlank()) return entries;
-        String q = groupFilterText.trim().toLowerCase();
+        List<String> terms = SearchTerms.parse(groupFilterText); // pipe-separated, OR-matched
+        if (terms.isEmpty()) return entries;
         List<GroupEntry> out = new ArrayList<>();
         for (GroupEntry e : entries) {
-            if (GroupKeyHelper.ALL.equals(e.key()) || e.display().toLowerCase().contains(q))
+            if (GroupKeyHelper.ALL.equals(e.key()) || SearchTerms.matchesAny(e.display().toLowerCase(), terms))
                 out.add(e);
         }
         return out;

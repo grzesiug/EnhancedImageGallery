@@ -133,17 +133,16 @@ public final class GallerySettings {
         PREFS.putBoolean(KEY_AISEARCH_TEXTMODE, textMode);
     }
 
-    // ── Recent AI searches (autocomplete history) ─────────────────────────────
+    // ── Recent searches (autocomplete history) ────────────────────────────────
+
+    private static final String KEY_RECENT_FILE_SEARCHES  = "filesearch.recent";
+    private static final String KEY_RECENT_GROUP_SEARCHES = "groupsearch.recent";
+    /** History size for the file-name and group-name search boxes. */
+    public static final int RECENT_FILTER_MAX = 10;
 
     /** Recent AI search queries, most-recent first (up to {@link #RECENT_SEARCHES_MAX}). */
     public static java.util.List<String> getRecentSearches() {
-        String raw = PREFS.get(KEY_RECENT_SEARCHES, "");
-        if (raw.isBlank()) return new java.util.ArrayList<>();
-        java.util.List<String> out = new java.util.ArrayList<>();
-        for (String s : raw.split(RECENT_SEP)) {
-            if (!s.isBlank()) out.add(s);
-        }
-        return out;
+        return getRecentList(KEY_RECENT_SEARCHES);
     }
 
     /**
@@ -151,13 +150,45 @@ public final class GallerySettings {
      * (case-insensitive), newest-first, capped at {@link #RECENT_SEARCHES_MAX}.
      */
     public static void addRecentSearch(String query) {
+        addRecentList(KEY_RECENT_SEARCHES, query, RECENT_SEARCHES_MAX);
+    }
+
+    /** Recent file-name search queries, most-recent first (up to {@link #RECENT_FILTER_MAX}). */
+    public static java.util.List<String> getRecentFileSearches() {
+        return getRecentList(KEY_RECENT_FILE_SEARCHES);
+    }
+    public static void addRecentFileSearch(String query) {
+        addRecentList(KEY_RECENT_FILE_SEARCHES, query, RECENT_FILTER_MAX);
+    }
+
+    /** Recent group-name filter queries, most-recent first (up to {@link #RECENT_FILTER_MAX}). */
+    public static java.util.List<String> getRecentGroupSearches() {
+        return getRecentList(KEY_RECENT_GROUP_SEARCHES);
+    }
+    public static void addRecentGroupSearch(String query) {
+        addRecentList(KEY_RECENT_GROUP_SEARCHES, query, RECENT_FILTER_MAX);
+    }
+
+    // ── Shared history impl ────────────────────────────────────────────────────
+
+    private static java.util.List<String> getRecentList(String key) {
+        String raw = PREFS.get(key, "");
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (raw.isBlank()) return out;
+        for (String s : raw.split(RECENT_SEP)) {
+            if (!s.isBlank()) out.add(s);
+        }
+        return out;
+    }
+
+    private static void addRecentList(String key, String query, int max) {
         if (query == null) return;
         String q = query.trim();
         if (q.isEmpty() || q.contains(RECENT_SEP)) return; // keep entries single-line
-        java.util.List<String> list = getRecentSearches();
+        java.util.List<String> list = getRecentList(key);
         list.removeIf(s -> s.equalsIgnoreCase(q));
         list.add(0, q);
-        while (list.size() > RECENT_SEARCHES_MAX) list.remove(list.size() - 1);
-        PREFS.put(KEY_RECENT_SEARCHES, String.join(RECENT_SEP, list));
+        while (list.size() > max) list.remove(list.size() - 1);
+        PREFS.put(key, String.join(RECENT_SEP, list));
     }
 }
