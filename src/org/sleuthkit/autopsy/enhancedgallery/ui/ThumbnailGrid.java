@@ -154,9 +154,18 @@ public class ThumbnailGrid extends JScrollPane {
 
         GridPanel() {
             setBackground(BG);
+            // Snippet tooltips linger 10 s while hovering the grid (default is ~4 s),
+            // giving time to read the matched text; restored on exit so the rest of
+            // Autopsy keeps Swing's default (ToolTipManager is a global singleton).
+            final javax.swing.ToolTipManager ttm = javax.swing.ToolTipManager.sharedInstance();
+            final int defaultDismiss = ttm.getDismissDelay();
             MouseAdapter ma = new MouseAdapter() {
                 @Override public void mouseMoved(MouseEvent e)    { onMove(e); }
-                @Override public void mouseExited(MouseEvent e)   { hoveredIdx=-1; repaint(); }
+                @Override public void mouseEntered(MouseEvent e)  { ttm.setDismissDelay(10_000); }
+                @Override public void mouseExited(MouseEvent e)   {
+                    ttm.setDismissDelay(defaultDismiss);
+                    hoveredIdx=-1; repaint();
+                }
                 @Override public void mousePressed(MouseEvent e)  { if (maybePopup(e)) return; }
                 // mouseReleased always fires regardless of mouse movement between press/release.
                 // No drag check — scrolling is via mouse wheel only, not drag.
@@ -168,7 +177,7 @@ public class ThumbnailGrid extends JScrollPane {
             addMouseListener(ma);
             addMouseMotionListener(ma);
             // Enable per-tile tooltips (used to show the matched-text snippet of a document hit)
-            javax.swing.ToolTipManager.sharedInstance().registerComponent(this);
+            ttm.registerComponent(this);
         }
 
         /**
