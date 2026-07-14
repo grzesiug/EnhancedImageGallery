@@ -35,7 +35,20 @@ public class GpsCache {
 
     private final Map<Long, GpsPoint> cache = new HashMap<>();
 
+    /**
+     * True only for coordinates that can exist on Earth: lat −90…90, lng −180…180,
+     * both finite. Some EXIF writers store garbage (e.g. 2183275042.13) that would
+     * otherwise poison the map view, the GPS-only filter and the tile badges.
+     */
+    public static boolean isValidCoordinate(double lat, double lng) {
+        return Double.isFinite(lat) && Double.isFinite(lng)
+                && lat >= -90.0 && lat <= 90.0
+                && lng >= -180.0 && lng <= 180.0;
+    }
+
+    /** Stores a point; silently ignores physically impossible coordinates. */
     public void put(long objId, double lat, double lng, String label) {
+        if (!isValidCoordinate(lat, lng)) return;
         cache.put(objId, new GpsPoint(lat, lng, label));
     }
 

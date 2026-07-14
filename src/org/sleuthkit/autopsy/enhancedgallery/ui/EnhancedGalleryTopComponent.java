@@ -1570,7 +1570,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             try {
                 var svc = org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.getInstance();
                 svc.ensureRunning();
-                var hits = svc.similar(fileId, idxDir, 50);
+                var hits = svc.similar(fileId, idxDir,
+                        org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.getFindSimilarTopN());
                 SwingUtilities.invokeLater(() -> {
                     statusBar.hideSpinner();
                     if (hits.isEmpty()) {
@@ -1600,7 +1601,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             try {
                 var tsvc = org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.getInstance();
                 tsvc.ensureRunning();
-                var hits = tsvc.similar(fileId, txtIdx, 50);
+                var hits = tsvc.similar(fileId, txtIdx,
+                        org.sleuthkit.autopsy.enhancedgallery.options.GallerySettings.getFindSimilarTopN());
                 java.util.LinkedHashSet<Long> ids = new java.util.LinkedHashSet<>();
                 java.util.List<Long> order = new java.util.ArrayList<>();
                 java.util.Map<Long, String> snippets = new java.util.HashMap<>();
@@ -1915,14 +1917,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
      */
     public void exportFiles(int rightClickedIdx) {
         // Resolve the target files on the EDT (indices → MediaFile), snapshotting now.
-        java.util.List<MediaFile> targets = new ArrayList<>();
-        if (!selected.isEmpty()) {
-            java.util.List<Integer> idxs = new ArrayList<>(selected);
-            java.util.Collections.sort(idxs);
-            for (int i : idxs) if (i >= 0 && i < visible.size()) targets.add(visible.get(i));
-        } else if (rightClickedIdx >= 0 && rightClickedIdx < visible.size()) {
-            targets.add(visible.get(rightClickedIdx));
-        }
+        java.util.List<MediaFile> targets = contextTargets(rightClickedIdx);
         if (targets.isEmpty()) return;
 
         JFileChooser chooser = new JFileChooser();
@@ -2018,6 +2013,140 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             if (!c.exists()) return c;
         }
         return new java.io.File(dir, base + "_" + System.nanoTime() + ext);
+    }
+
+    // ── Show on map ───────────────────────────────────────────────────────────
+
+    /** Selected files (or the right-clicked one when nothing is selected) — shared
+     *  target resolution for context-menu actions. Must be called on the EDT. */
+    private java.util.List<MediaFile> contextTargets(int rightClickedIdx) {
+        java.util.List<MediaFile> targets = new ArrayList<>();
+        if (!selected.isEmpty()) {
+            java.util.List<Integer> idxs = new ArrayList<>(selected);
+            java.util.Collections.sort(idxs);
+            for (int i : idxs) if (i >= 0 && i < visible.size()) targets.add(visible.get(i));
+        } else if (rightClickedIdx >= 0 && rightClickedIdx < visible.size()) {
+            targets.add(visible.get(rightClickedIdx));
+        }
+        return targets;
+    }
+
+    /** How many of the selected files (or the clicked one) have GPS coordinates.
+     *  Pure in-memory GpsCache lookups — safe to call on every context-menu open. */
+    public int gpsCountInSelection(int rightClickedIdx) {
+        int n = 0;
+        for (MediaFile mf : contextTargets(rightClickedIdx)) {
+            if (gpsCache.hasGps(mf.getId())) n++;
+        }
+        return n;
+    }
+
+    /**
+     * Opens a LOCAL map page (Leaflet + OpenStreetMap tiles) with a pin for every
+     * selected file that has GPS data; each pin's popup shows the photo thumbnail
+     * (embedded as a base64 data URI — the image never leaves this machine, only
+     * map tiles are fetched), the file name and coordinates. The view auto-fits
+     * all pins (fitBounds), so any spread — one street or three continents — is
+     * framed correctly on open.
+     */
+    public void showOnMap(int rightClickedIdx) {
+        final java.util.List<MediaFile> targets = new ArrayList<>();
+        for (MediaFile mf : contextTargets(rightClickedIdx)) {
+            if (gpsCache.hasGps(mf.getId())) targets.add(mf);
+        }
+        if (targets.isEmpty()) return;
+        final GpsCache gps = gpsCache;
+
+        statusBar.startIndeterminate("Building map…");
+        loaderPool.submit(() -> {
+            try {
+                java.nio.file.Path html = buildMapHtml(targets, gps);
+                java.awt.Desktop.getDesktop().browse(html.toUri());
+                SwingUtilities.invokeLater(statusBar::hideSpinner);
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, "Show on map failed", ex);
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    JOptionPane.showMessageDialog(this,
+                            "Could not open the map: " + ex.getMessage(),
+                            "Show on map", JOptionPane.ERROR_MESSAGE);
+                });
+            }
+        });
+    }
+
+    /** Writes the self-contained map HTML to the module temp dir and returns its path. */
+    private static java.nio.file.Path buildMapHtml(java.util.List<MediaFile> targets, GpsCache gps)
+            throws java.io.IOException {
+        StringBuilder markers = new StringBuilder();
+        for (MediaFile mf : targets) {
+            GpsCache.GpsPoint pt = gps.getGps(mf.getId());
+            if (pt == null) continue;
+            String img = thumbnailDataUri(mf);
+            StringBuilder popup = new StringBuilder("<div style='text-align:center'>");
+            if (img != null) popup.append("<img src='").append(img)
+                                  .append("' style='max-width:150px;max-height:150px'><br>");
+            popup.append("<b>").append(escapeJs(escapeHtml(mf.getName()))).append("</b><br>")
+                 .append(String.format(java.util.Locale.US, "%.6f, %.6f", pt.lat, pt.lng));
+            if (pt.label != null) popup.append("<br>").append(escapeJs(escapeHtml(pt.label)));
+            popup.append("</div>");
+            markers.append(String.format(java.util.Locale.US,
+                    "L.marker([%f,%f]).addTo(map).bindPopup(\"%s\");%n",
+                    pt.lat, pt.lng, popup));
+        }
+
+        String page = """
+            <!DOCTYPE html><html><head><meta charset="utf-8">
+            <title>Enhanced Evidence Gallery — map</title>
+            <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+            <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+            <style>html,body,#map{height:100%;margin:0}</style>
+            </head><body><div id="map"></div><script>
+            var map = L.map('map');
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                {maxZoom:19, attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+            MARKERS
+            var b = []; map.eachLayer(function(l){ if (l.getLatLng) b.push(l.getLatLng()); });
+            if (b.length === 1) map.setView(b[0], 16);
+            else map.fitBounds(L.latLngBounds(b).pad(0.15));
+            </script></body></html>
+            """.replace("MARKERS", markers.toString());
+
+        java.nio.file.Path dir = java.nio.file.Path.of(
+                System.getProperty("java.io.tmpdir"), "autopsy_enhanced_gallery");
+        java.nio.file.Files.createDirectories(dir);
+        java.nio.file.Path out = dir.resolve("map_" + System.currentTimeMillis() + ".html");
+        java.nio.file.Files.writeString(out, page, java.nio.charset.StandardCharsets.UTF_8);
+        out.toFile().deleteOnExit();
+        return out;
+    }
+
+    /** In-memory thumbnail → PNG base64 data URI (≤160px), or null if not decoded yet. */
+    private static String thumbnailDataUri(MediaFile mf) {
+        try {
+            java.awt.image.BufferedImage src = mf.getThumbnail();
+            if (src == null) return null;
+            int max = 160;
+            double sc = Math.min(1.0, (double) max / Math.max(src.getWidth(), src.getHeight()));
+            int w = Math.max(1, (int) (src.getWidth() * sc)), h = Math.max(1, (int) (src.getHeight() * sc));
+            java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h,
+                    java.awt.image.BufferedImage.TYPE_INT_RGB);
+            java.awt.Graphics2D g = img.createGraphics();
+            g.setRenderingHint(java.awt.RenderingHints.KEY_INTERPOLATION,
+                    java.awt.RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            g.drawImage(src, 0, 0, w, h, null);
+            g.dispose();
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            javax.imageio.ImageIO.write(img, "png", baos);
+            return "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(baos.toByteArray());
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    /** Escapes for embedding inside a double-quoted JS string literal. */
+    private static String escapeJs(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
     }
 
     public void jumpToFirstUnseen() {

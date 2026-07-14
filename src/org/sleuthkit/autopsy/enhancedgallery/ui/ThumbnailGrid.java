@@ -258,8 +258,11 @@ public class ThumbnailGrid extends JScrollPane {
 
             boolean isDoc = idx >= 0 && idx < files.size()
                     && files.get(idx).getMediaType() == MediaFile.MediaType.DOCUMENT;
+            int simTopN = org.sleuthkit.autopsy.enhancedgallery.options
+                    .GallerySettings.getFindSimilarTopN();
             JMenuItem similar = new JMenuItem(
-                    isDoc ? "Find similar documents" : "Find similar images", new AiSearchIcon(14));
+                    (isDoc ? "Find similar documents" : "Find similar images")
+                    + " (top " + simTopN + ")", new AiSearchIcon(14));
             similar.setToolTipText(multi
                     ? "Select a single file to find similar ones"
                     : isDoc
@@ -269,17 +272,32 @@ public class ThumbnailGrid extends JScrollPane {
             similar.addActionListener(ev -> parent.runFindSimilar(idx));
             m.add(similar);
 
-            JMenuItem open = new JMenuItem("Open externally");
+            JMenuItem open = new JMenuItem("Open externally", MenuIcons.openExternal(14));
             open.setEnabled(!multi); // single-file action
             open.addActionListener(ev -> parent.openFileExternally(idx));
             m.add(open);
 
             int selCount = parent.getSelected().size();
             JMenuItem export = new JMenuItem(selCount > 1
-                    ? "Save " + selCount + " files to disk…" : "Save to disk…");
+                    ? "Save " + selCount + " files to disk…" : "Save to disk…",
+                    MenuIcons.save(14));
             export.setToolTipText("Extract the selected file(s) to a folder on disk (original bytes)");
             export.addActionListener(ev -> parent.exportFiles(idx));
             m.add(export);
+
+            // Show on map — enabled only when the selection (or the clicked file)
+            // has GPS coordinates. The check is pure in-memory GpsCache lookups,
+            // done once per menu open, so it costs nothing noticeable.
+            int gpsCount = parent.gpsCountInSelection(idx);
+            JMenuItem showMap = new JMenuItem(gpsCount > 1
+                    ? "Show on map (" + gpsCount + ")" : "Show on map",
+                    MenuIcons.mapPin(14));
+            showMap.setEnabled(gpsCount > 0);
+            showMap.setToolTipText(gpsCount > 0
+                    ? "Open a local map with pin(s) and photo thumbnail(s) for the file(s) with GPS data"
+                    : "No GPS data in the selected file(s)");
+            showMap.addActionListener(ev -> parent.showOnMap(idx));
+            m.add(showMap);
 
             m.addSeparator();
             JMenu tagMenu = new JMenu("Tag");

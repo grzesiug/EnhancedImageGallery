@@ -304,13 +304,19 @@ public class PropertiesPanel extends JPanel {
                             attr.getAttributeType().getValueType();
                     if (vt == BlackboardAttribute.TSK_BLACKBOARD_ATTRIBUTE_VALUE_TYPE.DOUBLE) {
                         double d = attr.getValueDouble();
+                        // Some EXIF writers store garbage (e.g. 2183275042.13) — only
+                        // physically possible values may drive the map button. The raw
+                        // value still shows in the EXIF/GPS rows below (honest view of
+                        // the artifact), it just can't produce a nonsense maps link.
+                        boolean latOk = Double.isFinite(d) && d >= -90.0  && d <= 90.0;
+                        boolean lonOk = Double.isFinite(d) && d >= -180.0 && d <= 180.0;
                         // TSK_GEO_LATITUDE=119, TSK_GEO_LONGITUDE=120
-                        if (attrTypeId == 119) artifactLat = d;
-                        if (attrTypeId == 120) artifactLon = d;
+                        if (attrTypeId == 119 && latOk) artifactLat = d;
+                        if (attrTypeId == 120 && lonOk) artifactLon = d;
                         // Also check display name as fallback
                         String nl = name.toLowerCase();
-                        if (Double.isNaN(artifactLat) && nl.contains("latit")) artifactLat = d;
-                        if (Double.isNaN(artifactLon) && nl.contains("longit")) artifactLon = d;
+                        if (Double.isNaN(artifactLat) && latOk && nl.contains("latit"))  artifactLat = d;
+                        if (Double.isNaN(artifactLon) && lonOk && nl.contains("longit")) artifactLon = d;
                     }
 
                     if (isGps) gpsRows.add(new String[]{name, value});

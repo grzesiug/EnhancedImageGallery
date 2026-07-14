@@ -34,6 +34,7 @@ public class ToolSettingsDialog extends JDialog {
     private final JSpinner  timeoutSpinner;
     private final JSpinner  md5MaxSpinner;
     private final JSpinner  debounceSpinner;
+    private final JSpinner  findSimilarSpinner;
     private final JCheckBox md5PropagateCheck;
     private final JCheckBox excludeKnownCheck;
 
@@ -49,6 +50,8 @@ public class ToolSettingsDialog extends JDialog {
         md5MaxSpinner = new JSpinner(new SpinnerNumberModel(md5Max, 1, 10000, 10));
         int debounce = Math.max(0, Math.min(30, GallerySettings.getSidebarDebounceSeconds()));
         debounceSpinner = new JSpinner(new SpinnerNumberModel(debounce, 0, 30, 1));
+        int simTopN = Math.max(1, Math.min(50_000, GallerySettings.getFindSimilarTopN()));
+        findSimilarSpinner = new JSpinner(new SpinnerNumberModel(simTopN, 1, 50_000, 10));
         md5PropagateCheck = new JCheckBox(
                 "Propagate Seen/Tag to all files with same MD5 hash",
                 GallerySettings.isPropagateMd5());
@@ -194,6 +197,19 @@ public class ToolSettingsDialog extends JDialog {
         md5Panel.add(Box.createVerticalStrut(4));
         md5Panel.add(md5MaxRow);
         content.add(md5Panel);
+
+        content.add(Box.createVerticalStrut(8));
+
+        // ── AI features ────────────────────────────────────────────────────
+        JPanel aiPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 4));
+        aiPanel.setBorder(titled("AI features"));
+        aiPanel.add(new JLabel("\"Find similar\" results:"));
+        aiPanel.add(findSimilarSpinner);
+        JLabel simHint = new JLabel("(ranked by similarity; current value is shown in the right-click menu)");
+        simHint.setForeground(Color.GRAY);
+        simHint.setFont(simHint.getFont().deriveFont(11f));
+        aiPanel.add(simHint);
+        content.add(aiPanel);
 
         content.add(Box.createVerticalStrut(8));
 
@@ -432,6 +448,7 @@ public class ToolSettingsDialog extends JDialog {
         GallerySettings.setExcludeKnown(excludeKnownCheck.isSelected());
         GallerySettings.setPropagateMd5(md5PropagateCheck.isSelected());
         GallerySettings.setMd5MaxFiles((int) md5MaxSpinner.getValue());
+        GallerySettings.setFindSimilarTopN((int) findSimilarSpinner.getValue());
         org.sleuthkit.autopsy.enhancedgallery.decoder.ToolFinder.reload();
 
         // Retry thumbnails that previously failed (e.g. HEIC before ImageMagick was set)

@@ -119,6 +119,18 @@ public final class GallerySettings {
         PREFS.putInt(KEY_MD5_MAX_FILES, Math.max(1, Math.min(10000, n)));
     }
 
+    // ── Find similar result count ─────────────────────────────────────────────
+
+    private static final String KEY_FIND_SIMILAR_TOPN = "aisearch.findsimilar.topn";
+
+    /** How many results "Find similar images/documents" requests. Default: 50. */
+    public static int getFindSimilarTopN() {
+        return PREFS.getInt(KEY_FIND_SIMILAR_TOPN, 50);
+    }
+    public static void setFindSimilarTopN(int n) {
+        PREFS.putInt(KEY_FIND_SIMILAR_TOPN, Math.max(1, Math.min(50_000, n)));
+    }
+
     // ── AI search mode ────────────────────────────────────────────────────────
 
     /**
