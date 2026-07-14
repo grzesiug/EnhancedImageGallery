@@ -57,6 +57,12 @@ jobs:
           body: |
             ## Enhanced Evidence Gallery ${{ github.ref_name }}
 
+            Extended evidence gallery for Autopsy: images, video, audio and documents
+            (PDF, Office, e-mail…) with thumbnail grid, grouping and filtering,
+            bulk review workflow (seen/tagged, MD5 propagation), EXIF/GPS panel,
+            "Show on map" with photo pins, file-name/group search with history and
+            multi-phrase (`a|b`) matching, and export of selected files to disk.
+
             ### Installation
             1. Download `${{ steps.find_nbm.outputs.NBM_NAME }}` below
             2. In Autopsy: **Tools → Plugins → Downloaded → Add Plugins…**
@@ -65,6 +71,9 @@ jobs:
             ### Requirements
             - Autopsy 4.23.1+
             - Optional: ImageMagick, FFmpeg, dcraw (configure in ⚙ Settings)
+            - AI features (semantic search, Find similar) require the companion
+              plugins **AI Image Triage** (images) and **AI Text Triage**
+              (documents + OCR)
 
             See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full documentation.
           files: ${{ steps.find_nbm.outputs.NBM_PATH }}
