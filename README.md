@@ -76,7 +76,7 @@ An extended media gallery plugin for [Autopsy® Digital Forensics Platform](http
 | [FFmpeg](https://ffmpeg.org/) | Video thumbnails (MP4, MOV, AVI…) | [ffmpeg.org](https://ffmpeg.org/download.html) |
 | [dcraw](https://www.dechifro.org/dcraw/) | RAW camera files (CR2, NEF, ARW…) | [dechifro.org](https://www.dechifro.org/dcraw/) |
 
-> Configure tool paths in **⚙ Settings** after installation. Use **Auto-detect all** to find tools automatically.
+> **Important:** set the tool paths in **⚙ Settings** after installation (or use **Auto-detect all**). Without these paths the plugin can only render basic formats — ImageMagick and FFmpeg are required to generate previews for most image and video files.
 
 ---
 
@@ -93,7 +93,7 @@ An extended media gallery plugin for [Autopsy® Digital Forensics Platform](http
 
 1. Open a case in Autopsy
 2. Launch Enhanced Evidence Gallery from **Tools** menu or toolbar icon
-3. Configure external tools in **⚙ Settings → Auto-detect all**
+3. Set the external tool paths in **⚙ Settings** (or click **Auto-detect all**) — these paths are required for the plugin to generate previews for most image and video formats
 4. Browse files — use **Group by** to organize, filters to focus on what matters
 5. Click thumbnails to select, double-click to open in external viewer
 6. Use **Tag ▾** to apply forensic tags (synchronized with Autopsy)
