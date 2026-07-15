@@ -77,23 +77,29 @@ Kod-punkty zaczepienia w EEG:
 
 ---
 
-## 4. Do zrobienia po stronie AITT (mały, jeszcze NIE zrobiony)
+## 4. Po stronie AITT — ZROBIONE ✅ (endpoint `/document`)
 
-Transkrypt do podglądu potrzebuje endpointu **`/document`** w AITT — dziś go NIE ma
-(są tylko `/search /similar /categorize /ocr /ocr_pdf /index /flush_index`).
-
-Sugerowany kontrakt (do dopisania w `service/app/main.py`):
+Endpoint **`/document` jest już gotowy** (AITT commit f9e06a4):
 ```
 GET /document?index_dir=<...>&file_id=<docId>
-  -> { file_id, doc_kind, doc_label, text }
+  -> { file_id, doc_kind, doc_label, text }        (404 gdy brak w indeksie)
 ```
-Implementacja jest tania: AITT **już przechowuje pełny tekst chunków** w
-`meta.json` (`SNIPPET_TEXT_CHARS=4000/chunk`, pole `text` w `chunks`). Wystarczy
-skleić chunki danego `docId` w kolejności `char_start` → zwrócić transkrypt.
-Transkrypt wątku ma stały format (patrz `MessageThreadIndexer.buildTranscript`):
-`[YYYY-MM-DD HH:MM] [in]/[out] <nadawca>: <treść>` — łatwe do sparsowania na
-bąbelki. Offsety trafionego chunku (`char_start/char_end`) pozwalają podświetlić
-właściwą wiadomość. **Ten endpoint może dołożyć wątek AITT na życzenie EEG.**
+`text` to sklejony transkrypt (chunki złożone po `char_start`, nakładki przycięte,
+bez dublowania). Zweryfikowane e2e na `emailTest`: dla trafienia `thread-email`
+zwraca pełny transkrypt (21 wiadomości) w formacie:
+```
+E-mail thread: FW: <temat>
+--- [YYYY-MM-DD HH:MM] From: <nadawca>; To: <odbiorcy>; ---
+<treść wiadomości>
+--- [YYYY-MM-DD HH:MM] From: ... ---
+...
+```
+Czaty (`thread-chat`): `[YYYY-MM-DD HH:MM] [in]/[out] <nadawca>: <treść>` (patrz
+`AITextTriage/.../MessageThreadIndexer.buildTranscript`). Format jest stały i
+łatwy do parsowania na bąbelki. Do podświetlenia trafionej wiadomości można użyć
+`snippet` z hita (query-aware) — znajdź go w transkrypcie i podświetl.
+
+Czyli po stronie EEG zostaje TYLKO UI — dane i transkrypt są gotowe.
 
 ---
 
@@ -106,7 +112,7 @@ właściwą wiadomość. **Ten endpoint może dołożyć wątek AITT na życzeni
 
 ## 6. Kolejność
 
-1. AITT: dopisać `/document` (albo poprosić wątek AITT).
+1. ~~AITT: dopisać `/document`~~ — **ZROBIONE** (§4).
 2. EEG: klient czyta `doc_kind/doc_label`; `MediaFile` dla wątku (A); kafel-karta.
 3. EEG: PropertiesPanel + tooltip dla wątku.
 4. EEG: dwuklik → `/document` → transkrypt z podświetleniem.
