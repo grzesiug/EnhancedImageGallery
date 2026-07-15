@@ -158,3 +158,34 @@ stare wpisy `[kind,label]` wczytują się wstecznie jako `{kind,label}` bez meta
 
 Weryfikacja e2e: sprawa `emailTest` ma 8643 wątki e-mail zaindeksowane —
 `/search` zwraca hity `doc_kind="thread-email"` z `doc_label`; wystarczy je pokazać.
+
+---
+
+## 8. Zachowanie bez modułu AITT / bez ingestu (graceful degradation)
+
+Stan OBECNY w EEG (`EnhancedGalleryTopComponent.runSemanticSearch` +
+`AiTextSearchService`) — działa poprawnie, karty konwersacji muszą go zachować:
+
+- **AITT niezainstalowany** → `ensureRunning()` → `findServiceDir()` rzuca
+  „AI Text Triage service not found. Install it…" → łapane jako fatal →
+  `showAiTextUnavailableDialog` = czytelny dialog „Text search jest zasilane
+  modułem AI Text Triage — zainstaluj .nbm i uruchom ingest". ✓
+- **Serwis zainstalowany, ale zatrzymany** (serwis AITT żyje tylko podczas
+  ingestu) → `ensureRunning()` sam go startuje i czeka na `/health`. ✓
+- **Embedder-zaślepka** (brak wag modelu) → 503 → `EmbedderUnavailableException`
+  → dialog „embedder has no model weights (stub)". ✓
+- **Indeks zbudowany innym modelem** → 409 → `IndexModelMismatchException` →
+  dialog „re-run AI Text Triage ingest". ✓
+- **Sprawa NIE przeszła ingestu AITT** (brak `ModuleOutput/AITextTriage`):
+  `currentTextIndexDir()` i tak zwraca ścieżkę, serwis otwiera **pusty** indeks
+  i zwraca `[]` → EEG pokazuje **„No matches for: q"**. Brak crasha, ale
+  **mylące** (nie odróżnia „brak trafień" od „nigdy nie indeksowano").
+  🔧 **Zalecane (drobne, EEG)**: przed wyszukiwaniem sprawdzić istnienie indeksu
+  (`<idxDir>/text_embeddings.faiss` lub `meta.json`); gdy brak → pokazać
+  „Ta sprawa nie została zindeksowana przez AI Text Triage — uruchom jego ingest",
+  zamiast „No matches". To samo dotyczy kart konwersacji (bez indeksu — po prostu
+  brak kart, bez błędu).
+
+Zasada dla kart konwersacji: **każda ścieżka do AITT musi być owinięta w tę samą
+obsługę** (moduł może nie istnieć / serwis może nie odpowiadać) — nigdy nie
+zakładać, że `/search`//`document` są dostępne.
