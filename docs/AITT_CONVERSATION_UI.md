@@ -62,8 +62,15 @@ Trzeba więc zdecydować, jak wpiąć wyniki-artefakty:
    Dla wątku pokaż w PropertiesPanel: uczestnicy, aplikacja (SMS/WhatsApp/e-mail),
    liczba wiadomości, zakres dat (parsowalne z `doc_label` lub z artefaktu).
 3. **Dwuklik → transkrypt** z podświetleniem trafionego fragmentu (patrz §4).
-4. **Filtr / grupa „Messages"** obok istniejących typów (EEG ma już grupowanie
-   „by MIME" — dołożyć „conversations" / „by app").
+4. **Filtr / grupa „Messages"** obok istniejących typów. EEG ma już mechanizm
+   grupowania (np. „by MIME") — dołożyć grupowanie wątków po:
+   - **konwersacji** (sam wątek = grupa; naturalne, po `file_id` wątku),
+   - **uczestnikach / odbiorcach** (nadawcy+odbiorcy),
+   - **aplikacji** (SMS / WhatsApp / e-mail),
+   - **dacie** (zakres czasu wątku).
+   ⚠️ Grupowanie po **uczestnikach/odbiorcach/dacie wymaga metadanych
+   strukturalnych** — patrz §7. `doc_label` to tylko string do wyświetlenia
+   (parsowanie go pod grupowanie jest kruche i NIEZALECANE).
 
 Kod-punkty zaczepienia w EEG:
 - `ui/EnhancedGalleryTopComponent.java`: `setSemanticResult(...)`,
@@ -110,13 +117,42 @@ Czyli po stronie EEG zostaje TYLKO UI — dane i transkrypt są gotowe.
   `JTextArea` z podświetleniem — MVP: `JTextArea`, bąbelki później.
 - Skok do artefaktu w Autopsy (widok Communications) — miły dodatek, nie MVP.
 
+## 7. Metadane strukturalne wątku (potrzebne do grupowania) — DO USTALENIA
+
+Dziś kontrakt daje tylko `doc_label` (string). Do grupowania po uczestnikach /
+odbiorcach / dacie / aplikacji potrzeba pól **strukturalnych**. EEG nie policzy
+ich sam: widzi tylko artefakt PIERWSZEJ wiadomości, a uczestnicy/zakres dat
+wątku to agregat po WSZYSTKICH wiadomościach — a tę agregację robi już AITT
+(`MessageThreadIndexer`: normalizacja numerów do 9 cyfr, zbiór uczestników,
+`app`, liczba wiadomości, epoch min/max).
+
+**Rekomendacja:** AITT wystawia strukturę wątku (obok `doc_kind`/`doc_label`),
+zwracaną w hitach `/search`//`categorize` i w `/document`:
+```
+thread: {
+  app: "sms" | "whatsapp" | "email" | ...,
+  participants: ["+48501234567", "887654321", ...],   # znormalizowane
+  message_count: 21,
+  date_start: "2026-04-24T08:26:00Z",
+  date_end:   "2026-05-02T11:13:00Z"
+}
+```
+Wtedy grupowanie w EEG jest trywialne (grupuj po `app` / po zbiorze
+`participants` / po `date_start`), bez parsowania `doc_label`.
+
+Status: **NIE zrobione** — to kolejna zmiana formatu indeksu AITT (dodatkowy
+re-ingest, by wypełnić pola). Wątek AITT może to dołożyć na życzenie; do czasu
+tego EEG może zacząć od grupowania „po konwersacji" (samo `file_id`) i „po app"
+(z prefiksu `doc_label`), które nie wymagają nowych pól.
+
 ## 6. Kolejność
 
 1. ~~AITT: dopisać `/document`~~ — **ZROBIONE** (§4).
-2. EEG: klient czyta `doc_kind/doc_label`; `MediaFile` dla wątku (A); kafel-karta.
-3. EEG: PropertiesPanel + tooltip dla wątku.
-4. EEG: dwuklik → `/document` → transkrypt z podświetleniem.
-5. EEG: filtr/grupa „Messages".
+2. AITT (opcjonalnie, dla pełnego grupowania): strukturalne metadane wątku (§7).
+3. EEG: klient czyta `doc_kind/doc_label`; `MediaFile` dla wątku (A); kafel-karta.
+4. EEG: PropertiesPanel + tooltip dla wątku.
+5. EEG: dwuklik → `/document` → transkrypt z podświetleniem.
+6. EEG: filtr/grupa „Messages" (konwersacja/app od razu; uczestnicy/data po §7).
 
 Weryfikacja e2e: sprawa `emailTest` ma 8643 wątki e-mail zaindeksowane —
 `/search` zwraca hity `doc_kind="thread-email"` z `doc_label`; wystarczy je pokazać.
