@@ -13,16 +13,28 @@ Etap J w AITT indeksuje **wątki wiadomości** (SMS/czaty `TSK_MESSAGE`, e-maile
 Odpowiedzi `/search` **oraz** `/categorize` mają teraz na każdym hicie dwa nowe pola:
 
 ```
-/search  hit:  { file_id, chunk_idx, score, snippet, doc_kind, doc_label }
-/categorize hit:{ file_id, chunk_idx, margin, score, snippet, doc_kind, doc_label }
+/search  hit:  { file_id, chunk_idx, score, snippet,
+                 doc_kind, doc_label, doc_app, doc_participants,
+                 doc_msg_count, doc_date_start, doc_date_end }
+/categorize hit: { ... margin, score, snippet, <te same pola doc_*> }
 ```
 
 - `doc_kind`: `""` (zwykły plik), `"thread-chat"` (SMS/komunikator), `"thread-email"`.
 - `doc_label`: gotowa etykieta do wyświetlenia, np.
   `"Chat (SMS): +48 501-234-567 <-> 887654321 (12 msgs)"` albo
   `"E-mail thread: Re: rekrutacja EC Tęgoborze (5 msgs)"`.
+- **Metadane strukturalne do grupowania** (puste dla zwykłych plików):
+  - `doc_app`: `"sms"` | `"whatsapp"` | `"email"` | … (typ/aplikacja),
+  - `doc_participants`: lista **znormalizowanych** uczestników
+    (numery → 9 ostatnich cyfr, e-mail → lowercase), np. `["501234567","887654321"]`,
+  - `doc_msg_count`: liczba wiadomości w wątku,
+  - `doc_date_start` / `doc_date_end`: ISO-8601 UTC zakresu czasu wątku (`""` gdy nieznany).
 - `snippet`: **query-aware** (okno wokół trafionego zdania; dla wątku — fragment
   transkryptu), już oczyszczony ze znaków sterujących.
+
+Te same pola `doc_*` zwraca też `/document` (§4). Grupowanie w EEG jest więc
+możliwe wprost po `doc_app` / `doc_participants` / `doc_date_start` — bez
+parsowania `doc_label`.
 
 Dla wątku **`file_id` = obj_id PIERWSZEJ (najniższej) wiadomości wątku** — czyli
 **artefakt** `TSK_EMAIL_MSG`/`TSK_MESSAGE`, a NIE `AbstractFile`.
@@ -117,42 +129,32 @@ Czyli po stronie EEG zostaje TYLKO UI — dane i transkrypt są gotowe.
   `JTextArea` z podświetleniem — MVP: `JTextArea`, bąbelki później.
 - Skok do artefaktu w Autopsy (widok Communications) — miły dodatek, nie MVP.
 
-## 7. Metadane strukturalne wątku (potrzebne do grupowania) — DO USTALENIA
+## 7. Metadane strukturalne wątku (do grupowania) — ZROBIONE ✅
 
-Dziś kontrakt daje tylko `doc_label` (string). Do grupowania po uczestnikach /
-odbiorcach / dacie / aplikacji potrzeba pól **strukturalnych**. EEG nie policzy
-ich sam: widzi tylko artefakt PIERWSZEJ wiadomości, a uczestnicy/zakres dat
-wątku to agregat po WSZYSTKICH wiadomościach — a tę agregację robi już AITT
-(`MessageThreadIndexer`: normalizacja numerów do 9 cyfr, zbiór uczestników,
-`app`, liczba wiadomości, epoch min/max).
+AITT wystawia komplet pól strukturalnych na każdym hicie i w `/document`
+(AITT commit 7c3f193): `doc_app`, `doc_participants` (znormalizowane),
+`doc_msg_count`, `doc_date_start`, `doc_date_end` — patrz §1. Liczone w
+`MessageThreadIndexer` (agregat po WSZYSTKICH wiadomościach wątku; EEG nie
+policzyłby ich sam, bo widzi tylko artefakt pierwszej wiadomości).
 
-**Rekomendacja:** AITT wystawia strukturę wątku (obok `doc_kind`/`doc_label`),
-zwracaną w hitach `/search`//`categorize` i w `/document`:
-```
-thread: {
-  app: "sms" | "whatsapp" | "email" | ...,
-  participants: ["+48501234567", "887654321", ...],   # znormalizowane
-  message_count: 21,
-  date_start: "2026-04-24T08:26:00Z",
-  date_end:   "2026-05-02T11:13:00Z"
-}
-```
-Wtedy grupowanie w EEG jest trywialne (grupuj po `app` / po zbiorze
-`participants` / po `date_start`), bez parsowania `doc_label`.
+Grupowanie w EEG jest więc możliwe wprost:
+- **po aplikacji** → `doc_app`,
+- **po uczestnikach/odbiorcach** → zbiór `doc_participants` (klucz grupy = np.
+  posortowany `doc_participants` złączony),
+- **po dacie** → `doc_date_start` (np. bucket dzienny/miesięczny),
+- **po konwersacji** → `file_id`.
 
-Status: **NIE zrobione** — to kolejna zmiana formatu indeksu AITT (dodatkowy
-re-ingest, by wypełnić pola). Wątek AITT może to dołożyć na życzenie; do czasu
-tego EEG może zacząć od grupowania „po konwersacji" (samo `file_id`) i „po app"
-(z prefiksu `doc_label`), które nie wymagają nowych pól.
+Uwaga: pola wypełnia dopiero ingest ≥ AITT 1.7 (re-ingest zaktualizuje `meta.json`;
+stare wpisy `[kind,label]` wczytują się wstecznie jako `{kind,label}` bez metadanych).
 
 ## 6. Kolejność
 
 1. ~~AITT: dopisać `/document`~~ — **ZROBIONE** (§4).
-2. AITT (opcjonalnie, dla pełnego grupowania): strukturalne metadane wątku (§7).
-3. EEG: klient czyta `doc_kind/doc_label`; `MediaFile` dla wątku (A); kafel-karta.
+2. ~~AITT: strukturalne metadane wątku~~ — **ZROBIONE** (§7).
+3. EEG: klient czyta `doc_*`; `MediaFile` dla wątku (A); kafel-karta.
 4. EEG: PropertiesPanel + tooltip dla wątku.
 5. EEG: dwuklik → `/document` → transkrypt z podświetleniem.
-6. EEG: filtr/grupa „Messages" (konwersacja/app od razu; uczestnicy/data po §7).
+6. EEG: filtr/grupa „Messages" (po app / uczestnikach / dacie / konwersacji — §7).
 
 Weryfikacja e2e: sprawa `emailTest` ma 8643 wątki e-mail zaindeksowane —
 `/search` zwraca hity `doc_kind="thread-email"` z `doc_label`; wystarczy je pokazać.
