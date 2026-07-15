@@ -1366,6 +1366,30 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         }
     }
 
+    /**
+     * Czy w katalogu modulu jest zbudowany indeks AI (sprawa przeszla ingest).
+     * Brak katalogu = sprawy nie indeksowano -> odrozniamy od "brak trafien".
+     * Rozpoznajemy po {@code meta.json}/{@code *.faiss}; przy nieznanym ukladzie
+     * (inny modul) jestesmy liberalni, by nie blokowac wyszukiwania.
+     */
+    private static boolean aiIndexExists(String idxDir) {
+        java.io.File dir = new java.io.File(idxDir);
+        if (!dir.isDirectory()) {
+            return false;
+        }
+        java.io.File[] files = dir.listFiles();
+        if (files == null || files.length == 0) {
+            return false;
+        }
+        for (java.io.File f : files) {
+            String n = f.getName();
+            if (n.equals("meta.json") || n.endsWith(".faiss")) {
+                return true;
+            }
+        }
+        return true; // katalog niepusty, ale bez rozpoznawalnego indeksu - nie blokuj
+    }
+
     /** Matched-text snippet for a document hit (from the last text search), or null. */
     public String getSemanticSnippet(long objId) {
         java.util.Map<Long, String> s = semanticSnippets;
@@ -1436,6 +1460,19 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         if (idxDir == null) {
             JOptionPane.showMessageDialog(this, "No case is open.",
                     "AI search", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        // Sprawa nie przeszla ingestu tego modulu -> brak indeksu. Rozrozniamy to
+        // od "brak trafien" (pusty indeks zwrocilby po prostu []), zeby nie
+        // wprowadzac analityka w blad. Bez tego serwis wystartowalby na pusto.
+        if (!aiIndexExists(idxDir)) {
+            String module = textMode ? "AI Text Triage" : "AI Image Triage";
+            JOptionPane.showMessageDialog(this,
+                    "<html><body style='width:420px'>"
+                    + "<b>This case hasn't been indexed by " + module + " yet.</b><br><br>"
+                    + "Run ingest with the <b>" + module + "</b> module on this case to build "
+                    + "the AI index, then this search will work here.</body></html>",
+                    "Not indexed yet", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 

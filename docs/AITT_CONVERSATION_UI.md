@@ -177,14 +177,11 @@ Stan OBECNY w EEG (`EnhancedGalleryTopComponent.runSemanticSearch` +
 - **Indeks zbudowany innym modelem** → 409 → `IndexModelMismatchException` →
   dialog „re-run AI Text Triage ingest". ✓
 - **Sprawa NIE przeszła ingestu AITT** (brak `ModuleOutput/AITextTriage`):
-  `currentTextIndexDir()` i tak zwraca ścieżkę, serwis otwiera **pusty** indeks
-  i zwraca `[]` → EEG pokazuje **„No matches for: q"**. Brak crasha, ale
-  **mylące** (nie odróżnia „brak trafień" od „nigdy nie indeksowano").
-  🔧 **Zalecane (drobne, EEG)**: przed wyszukiwaniem sprawdzić istnienie indeksu
-  (`<idxDir>/text_embeddings.faiss` lub `meta.json`); gdy brak → pokazać
-  „Ta sprawa nie została zindeksowana przez AI Text Triage — uruchom jego ingest",
-  zamiast „No matches". To samo dotyczy kart konwersacji (bez indeksu — po prostu
-  brak kart, bez błędu).
+  **NAPRAWIONE** — `runSemanticSearch` sprawdza teraz `aiIndexExists(idxDir)`
+  (istnienie katalogu + `meta.json`/`*.faiss`) PRZED startem serwisu i przy braku
+  indeksu pokazuje „This case hasn't been indexed by AI Text Triage yet — run
+  ingest…" zamiast „No matches" (i nie startuje serwisu na pusto). Dla kart
+  konwersacji: bez indeksu — po prostu brak kart, bez błędu.
 
 Zasada dla kart konwersacji: **każda ścieżka do AITT musi być owinięta w tę samą
 obsługę** (moduł może nie istnieć / serwis może nie odpowiadać) — nigdy nie
