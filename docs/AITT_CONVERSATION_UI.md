@@ -189,7 +189,15 @@ zakładać, że `/search`//`document` są dostępne.
 
 ---
 
-## 9. „Group by Contact" — zaakceptowany projekt (do zrobienia, EEG)
+## 9. „Group by Contact" — ZROBIONE ✅ (EEG, 2026-07-16)
+
+Zrealizowane wg projektu poniżej: `GroupKeyHelper.keysOf()` (multi-membership,
+pliki bez kontaktów → pusta lista, tylko "All files"), pętla po kluczach w
+`GroupSidebar.rebuild`, dopasowanie ANY-key w `matchesGroupKey`, sort
+`doc_date_start` malejąco pod grupowaniem Contact, pozycja „Contact" w combo,
+menu karty wątku: Open source file / Show source in case tree (reflective
+`ViewContextAction`) / Show all from this contact (submenu przy >1 uczestniku,
+`ActionBar.selectGroupBy` + `onGroupSelected`).
 
 Życzenie użytkownika (2026-07-16): dziś „Participants" grupuje po CAŁYM zbiorze
 uczestników (`A ↔ B` = jedna grupa); brakuje grupowania **per pojedynczy kontakt**

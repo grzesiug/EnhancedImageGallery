@@ -13,6 +13,23 @@ public final class GroupKeyHelper {
 
     private GroupKeyHelper() {}
 
+    /**
+     * All group keys this file belongs to under the given mode. Most modes yield
+     * exactly one key; "contact" is MULTI-MEMBERSHIP — a thread with participants
+     * {A,B} belongs to group A AND group B (so per-contact counts sum to more than
+     * the thread count — intended). Ordinary files yield an EMPTY list under
+     * "contact": they have no contacts and appear only under "All files".
+     */
+    public static java.util.List<String> keysOf(MediaFile mf, String groupBy) {
+        if (groupBy != null && groupBy.equalsIgnoreCase("contact")) {
+            if (!mf.isThread()) return java.util.List.of();
+            java.util.List<String> p = mf.getDocParticipants();
+            return p.isEmpty() ? java.util.List.of("(unknown participants)")
+                               : java.util.List.copyOf(p);
+        }
+        return java.util.List.of(keyOf(mf, groupBy));
+    }
+
     public static String keyOf(MediaFile mf, String groupBy) {
         if (groupBy == null) groupBy = "path";
         return switch (groupBy.toLowerCase()) {
@@ -75,6 +92,7 @@ public final class GroupKeyHelper {
             case "format", "extension" -> "Extensions";
             case "mime", "mime type"   -> "MIME types";
             case "participants"        -> "Participants";
+            case "contact"             -> "Contacts";
             case "date", "modified"    -> "Modified dates";
             case "accessed"            -> "Accessed dates";
             case "created"             -> "Created dates";

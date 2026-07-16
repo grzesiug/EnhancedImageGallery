@@ -304,10 +304,14 @@ public class GroupSidebar extends JPanel {
                     }
                 }
             } else {
-                String key = GroupKeyHelper.keyOf(mf, groupBy);
-                int[] c = counts.computeIfAbsent(key, k -> new int[2]);
-                c[0]++;
-                if (isUnseen) c[1]++;
+                // keysOf supports multi-membership (e.g. "contact": a thread with
+                // participants {A,B} counts in group A AND B) and may be empty
+                // (ordinary files under "contact" appear only in "All files").
+                for (String key : GroupKeyHelper.keysOf(mf, groupBy)) {
+                    int[] c = counts.computeIfAbsent(key, k -> new int[2]);
+                    c[0]++;
+                    if (isUnseen) c[1]++;
+                }
             }
         }
 

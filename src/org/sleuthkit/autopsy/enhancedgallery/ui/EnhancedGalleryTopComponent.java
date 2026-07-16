@@ -423,8 +423,10 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             if ("(untagged)".equals(grpKey)) return tags.isEmpty();
             return tags.stream().anyMatch(t -> t.equalsIgnoreCase(grpKey));
         }
+        // keysOf supports multi-membership ("contact") — a tile passes if ANY of
+        // its keys matches the selected group.
         return org.sleuthkit.autopsy.enhancedgallery.datamodel
-                .GroupKeyHelper.keyOf(mf, grpBy).equals(grpKey);
+                .GroupKeyHelper.keysOf(mf, grpBy).contains(grpKey);
     }
 
     /**
@@ -704,6 +706,19 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                 // Semantic filter — no-op unless an AI search is active (semIds != null)
                 .filter(mf -> semIds == null || semIds.contains(mf.getId()))
                 .collect(java.util.stream.Collectors.toList());
+
+            // Under Contact grouping, newest conversation first (doc_date_start is
+            // ISO-8601 so lexicographic compare works; unknown dates sink to the end).
+            // An active AI search takes precedence (relevance ranking below).
+            if (semOrder == null && "contact".equalsIgnoreCase(grpBy)) {
+                result.sort((a, b) -> {
+                    String da = a.getDocDateStart(), dbs = b.getDocDateStart();
+                    if (da.isBlank() && dbs.isBlank()) return 0;
+                    if (da.isBlank()) return 1;
+                    if (dbs.isBlank()) return -1;
+                    return dbs.compareTo(da); // descending
+                });
+            }
 
             // When an AI search is active, order the grid by relevance (score rank)
             // instead of the default allFiles order.
@@ -2337,6 +2352,67 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     /** Escapes for embedding inside a double-quoted JS string literal. */
     private static String escapeJs(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
+    }
+
+    /** Opens the thread's SOURCE FILE (mmssms.db/.eml/…) in the external viewer —
+     *  same path an ordinary file takes on double-click. */
+    public void openThreadSourceExternally(int visibleIdx) {
+        if (visibleIdx < 0 || visibleIdx >= visible.size()) return;
+        MediaFile mf = visible.get(visibleIdx);
+        loaderPool.submit(() -> {
+            try {
+                org.sleuthkit.autopsy.enhancedgallery.options.ExternalViewerService
+                        .openDefault(mf.getAbstractFile());
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, "Could not open source file: " + mf.getName(), ex);
+                SwingUtilities.invokeLater(() ->
+                    JOptionPane.showMessageDialog(this,
+                            "Cannot open source file: " + ex.getMessage(),
+                            "Open Error", JOptionPane.ERROR_MESSAGE));
+            }
+        });
+    }
+
+    /**
+     * Navigates Autopsy's main case tree to the thread's source file, via
+     * ViewContextAction (the same "View File in Directory" the tree uses).
+     * Reflective — same pattern as ExternalViewerService — so the gallery keeps
+     * no compile-time dependency on the directorytree module internals.
+     */
+    public void showSourceInCaseTree(int visibleIdx) {
+        if (visibleIdx < 0 || visibleIdx >= visible.size()) return;
+        final MediaFile mf = visible.get(visibleIdx);
+        try {
+            Class<?> actionCls = Class.forName(
+                    "org.sleuthkit.autopsy.directorytree.ViewContextAction");
+            Object action = actionCls
+                    .getConstructor(String.class, org.sleuthkit.datamodel.Content.class)
+                    .newInstance("Show in case tree", mf.getAbstractFile());
+            ((javax.swing.Action) action).actionPerformed(
+                    new java.awt.event.ActionEvent(this, java.awt.event.ActionEvent.ACTION_PERFORMED, ""));
+            // Bring the main Autopsy window forward — the gallery runs in its own frame.
+            java.awt.Window main = org.openide.windows.WindowManager.getDefault().getMainWindow();
+            if (main != null) main.toFront();
+        } catch (Exception ex) {
+            logger.log(Level.WARNING, "Show-in-case-tree failed", ex);
+            JOptionPane.showMessageDialog(this,
+                    "Could not navigate the case tree: "
+                    + (ex.getMessage() != null ? ex.getMessage() : ex.toString()),
+                    "Show in case tree", JOptionPane.WARNING_MESSAGE);
+        }
+    }
+
+    /**
+     * "Show all from this contact": switches grouping to Contact and selects the
+     * given contact's group — one click from a conversation card to everything
+     * that person appears in.
+     */
+    public void showAllFromContact(String contact) {
+        if (contact == null || contact.isBlank()) return;
+        // Switch the combo first — it fires setGroupBy("contact"), which resets the
+        // active group key and rebuilds the sidebar; then select our group.
+        if (actionBar != null) actionBar.selectGroupBy("Contact");
+        onGroupSelected(contact);
     }
 
     // ── Thread transcript view ────────────────────────────────────────────────

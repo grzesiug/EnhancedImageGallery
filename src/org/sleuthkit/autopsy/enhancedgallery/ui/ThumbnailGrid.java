@@ -283,6 +283,37 @@ public class ThumbnailGrid extends JScrollPane {
             open.addActionListener(ev -> parent.openFileExternally(idx));
             m.add(open);
 
+            if (isThread && !multi) {
+                MediaFile tmf = files.get(idx);
+
+                JMenuItem openSrc = new JMenuItem("Open source file", MenuIcons.openExternal(14));
+                openSrc.setToolTipText("Open the thread's source file ("
+                        + tmf.getAbstractFile().getName() + ") in the external viewer");
+                openSrc.addActionListener(ev -> parent.openThreadSourceExternally(idx));
+                m.add(openSrc);
+
+                JMenuItem showTree = new JMenuItem("Show source in case tree");
+                showTree.setToolTipText("Navigate Autopsy's case tree to the source file");
+                showTree.addActionListener(ev -> parent.showSourceInCaseTree(idx));
+                m.add(showTree);
+
+                java.util.List<String> contacts = tmf.getDocParticipants();
+                if (contacts.size() == 1) {
+                    String c0 = contacts.get(0);
+                    JMenuItem allFrom = new JMenuItem("Show all from " + c0);
+                    allFrom.addActionListener(ev -> parent.showAllFromContact(c0));
+                    m.add(allFrom);
+                } else if (contacts.size() > 1) {
+                    JMenu allFrom = new JMenu("Show all from this contact");
+                    for (String c : contacts) {
+                        JMenuItem ci = new JMenuItem(c);
+                        ci.addActionListener(ev -> parent.showAllFromContact(c));
+                        allFrom.add(ci);
+                    }
+                    m.add(allFrom);
+                }
+            }
+
             int selCount = parent.getSelected().size();
             JMenuItem export = new JMenuItem(selCount > 1
                     ? "Save " + selCount + " files to disk…" : "Save to disk…",

@@ -16,7 +16,7 @@ public class ActionBar extends JPanel {
 
     // Group by
     private final JComboBox<String> groupByBox = new JComboBox<>(
-            new String[]{"Path","Extension","MIME type","Modified","Accessed","Created","Changed","Tag","Participants"});
+            new String[]{"Path","Extension","MIME type","Modified","Accessed","Created","Changed","Tag","Participants","Contact"});
 
     // Filter checkboxes
     private final JCheckBox cbUnseen = checkTip("Unseen", true,  "Show files not yet reviewed");
@@ -74,6 +74,8 @@ public class ActionBar extends JPanel {
                 + "Modified/Accessed/Created/Changed: by date<br>"
                 + "Tag: by applied tag<br>"
                 + "Participants: conversations by who talked to whom (Messages)<br>"
+                + "Contact: conversations per single contact — a thread with A and B<br>"
+                + "&nbsp;&nbsp;appears under both A and B (counts overlap by design)<br>"
                 + "For conversations: Extension = app, Modified = thread month</html>");
         groupByBox.addActionListener(e -> {
             String sel = (String) groupByBox.getSelectedItem();
@@ -268,6 +270,14 @@ public class ActionBar extends JPanel {
 
     public void resetGroupBy() {
         groupByBox.setSelectedItem("Path");
+    }
+
+    /**
+     * Programmatically switches the Group-by combo (fires the normal listener,
+     * i.e. parent.setGroupBy). Used by "Show all from this contact".
+     */
+    public void selectGroupBy(String item) {
+        groupByBox.setSelectedItem(item);
     }
 
     public void updateOpenButton(boolean e) {}
