@@ -16,7 +16,7 @@ public class ActionBar extends JPanel {
 
     // Group by
     private final JComboBox<String> groupByBox = new JComboBox<>(
-            new String[]{"Path","Extension","MIME type","Modified","Accessed","Created","Changed","Tag"});
+            new String[]{"Path","Extension","MIME type","Modified","Accessed","Created","Changed","Tag","Participants"});
 
     // Filter checkboxes
     private final JCheckBox cbUnseen = checkTip("Unseen", true,  "Show files not yet reviewed");
@@ -28,6 +28,9 @@ public class ActionBar extends JPanel {
     private final JCheckBox cbDocument = checkTip("Documents", false,
             "Show document files (PDF, DOCX, XLSX, TXT, EML...). Off by default — "
             + "documents are loaded on demand only when this is enabled.");
+    private final JCheckBox cbMessage = checkTip("Messages", false,
+            "Show conversation cards (SMS/chat/e-mail threads indexed by AI Text Triage). "
+            + "Off by default — threads are fetched on demand when this is enabled.");
     private final JCheckBox cbGps    = checkTip("GPS only",        false, "Show only files with GPS coordinates in EXIF");
     private final JCheckBox cbBroken = checkTip("No preview only", false, "Show only files for which thumbnail could not be generated");
 
@@ -69,7 +72,9 @@ public class ActionBar extends JPanel {
                 + "Extension: by file type (JPG, PNG...)<br>"
                 + "MIME type: by content type<br>"
                 + "Modified/Accessed/Created/Changed: by date<br>"
-                + "Tag: by applied tag</html>");
+                + "Tag: by applied tag<br>"
+                + "Participants: conversations by who talked to whom (Messages)<br>"
+                + "For conversations: Extension = app, Modified = thread month</html>");
         groupByBox.addActionListener(e -> {
             String sel = (String) groupByBox.getSelectedItem();
             if (sel != null) parent.setGroupBy(sel.toLowerCase());
@@ -85,7 +90,7 @@ public class ActionBar extends JPanel {
 
         // ── Type filters ──────────────────────────────────────────────────────
         JPanel tyPanel = filterGroup("Type");
-        tyPanel.add(cbImage); tyPanel.add(cbVideo); tyPanel.add(cbAudio); tyPanel.add(cbDocument);
+        tyPanel.add(cbImage); tyPanel.add(cbVideo); tyPanel.add(cbAudio); tyPanel.add(cbDocument); tyPanel.add(cbMessage);
 
         // ── More ──────────────────────────────────────────────────────────────
         JPanel moPanel = filterGroup("More");
@@ -275,6 +280,7 @@ public class ActionBar extends JPanel {
         if (cbVideo.isSelected()) s.add("video");
         if (cbAudio.isSelected()) s.add("audio");
         if (cbDocument.isSelected()) s.add("document");
+        if (cbMessage.isSelected()) s.add("message");
         return s;
     }
     public Set<String> getActiveStatusFilters() {
@@ -297,6 +303,7 @@ public class ActionBar extends JPanel {
         ty.clear(); if (cbImage.isSelected()) ty.add("image");
         if (cbVideo.isSelected()) ty.add("video"); if (cbAudio.isSelected()) ty.add("audio");
         if (cbDocument.isSelected()) ty.add("document");
+        if (cbMessage.isSelected()) ty.add("message");
         parent.setGeoOnly(cbGps.isSelected());
         parent.setShowBroken(cbBroken.isSelected());
         onFilteringStart();

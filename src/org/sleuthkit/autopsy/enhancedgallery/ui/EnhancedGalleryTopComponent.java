@@ -99,6 +99,17 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     // Matched-text snippets from a document (BGE-M3) search, keyed by obj_id — shown
     // in the tile tooltip and PropertiesPanel. Null for visual (CLIP) searches.
     private volatile java.util.Map<Long, String> semanticSnippets = null;
+    // Conversation cards (message threads from AITT) injected into allFiles for the
+    // DURATION OF A TEXT SEARCH only — removed when the search is cleared/replaced.
+    // Their MediaFile identity is the thread's artifact obj_id (see MediaFile.forThread).
+    private final java.util.List<MediaFile> threadCards = new java.util.ArrayList<>();
+    // Persistent conversation browsing (Messages filter): ALL indexed threads are
+    // fetched once from AITT /threads and stay in allFiles for the session.
+    // loadedThreadIds keeps search injection from duplicating them.
+    private volatile boolean threadsLoaded  = false;
+    private volatile boolean threadsLoading = false;
+    private final java.util.Set<Long> loadedThreadIds =
+            java.util.Collections.synchronizedSet(new java.util.HashSet<>());
     // Documents are loaded lazily (option b): only the first time the user enables
     // the "Documents" type filter. Pure-image analysts never pay the load cost.
     private volatile boolean documentsLoaded  = false;
@@ -288,6 +299,15 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         documentsLoaded  = false;
         documentsLoading = false;
         lastSidebarTypes = null;
+        threadCards.clear();      // allFiles was cleared above — drop stale card refs
+        threadsLoaded  = false;
+        threadsLoading = false;
+        loadedThreadIds.clear();
+        semanticMatchIds = null;  // and any leftover AI result from the previous open
+        semanticOrder    = null;
+        semanticSnippets = null;
+        semanticLabel    = null;
+        if (semanticBar != null) semanticBar.hideBar();
         SwingUtilities.invokeLater(() -> { if (actionBar != null) actionBar.resetGroupBy(); });
 
         // Build ID -> name map from all data sources (authoritative, ID-based).
@@ -465,6 +485,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             java.util.Map<String, java.util.List<MediaFile>> idx = new java.util.HashMap<>();
             synchronized (allFiles) {
                 for (MediaFile mf : allFiles) {
+                    if (mf.isThread()) continue; // cards share their source file's MD5
                     String md5 = mf.getMd5Hash();
                     if (md5 != null && !md5.isBlank()
                             && !md5.equals("0000000000000000000000000000000000")) {
@@ -490,6 +511,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             java.util.Map<String, java.util.List<MediaFile>> idx = new java.util.HashMap<>();
             synchronized (allFiles) {
                 for (MediaFile mf : allFiles) {
+                    if (mf.isThread()) continue; // cards share their source file's MD5
                     String md5 = mf.getMd5Hash();
                     if (md5 != null && !md5.isBlank()
                             && !md5.equals("0000000000000000000000000000000000")) {
@@ -509,6 +531,9 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         java.util.Set<String> approvedMd5s   = new java.util.HashSet<>();
 
         for (MediaFile mf : originals) {
+            // A conversation card carries its SOURCE FILE's MD5 (e.g. mmssms.db) —
+            // propagating through it would spill review state onto unrelated copies.
+            if (mf.isThread()) continue;
             String md5 = mf.getMd5Hash();
             if (md5 == null || md5.isBlank()) continue;
             java.util.List<MediaFile> duplicates = md5Index.get(md5);
@@ -574,10 +599,65 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         ));
     }
 
+    /**
+     * Lazily loads ALL indexed conversation threads (AITT {@code /threads}) the
+     * first time the "Messages" filter is enabled. The cards stay in allFiles for
+     * the session (browsing, grouping, and search all see them). On failure a
+     * dialog is shown once and loading is not retried until the case reloads.
+     */
+    private void ensureThreadsLoaded() {
+        if (threadsLoaded || threadsLoading) return;
+        threadsLoading = true;
+        final String txtIdx = currentTextIndexDir();
+        if (txtIdx == null) { threadsLoading = false; return; }
+        if (!aiIndexExists(txtIdx)) {
+            threadsLoaded = true; threadsLoading = false;
+            JOptionPane.showMessageDialog(this,
+                    "<html><body style='width:420px'><b>This case hasn't been indexed by "
+                    + "AI Text Triage yet.</b><br><br>Run ingest with the AI Text Triage "
+                    + "module to index message threads, then enable Messages here.</body></html>",
+                    "Not indexed yet", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        logger.log(Level.INFO, "Messages filter enabled — fetching threads from AITT");
+        statusBar.startIndeterminate("Loading conversations…");
+        loaderPool.submit(() -> {
+            try {
+                var tsvc = org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.getInstance();
+                tsvc.ensureRunning();
+                var hits = tsvc.threads(txtIdx);
+                final java.util.List<MediaFile> cards = buildThreadCards(hits);
+                SwingUtilities.invokeLater(() -> {
+                    threadsLoaded  = true;
+                    threadsLoading = false;
+                    statusBar.hideSpinner();
+                    // Search-injected temp cards for the same threads become redundant.
+                    removeThreadCards();
+                    for (MediaFile c : cards) loadedThreadIds.add(c.getId());
+                    allFiles.addAll(cards);
+                    logger.log(Level.INFO, "Loaded {0} conversation cards", cards.size());
+                    applyFilters();
+                    rebuildSidebarDebounced();
+                    updateStatusBar();
+                });
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, "Thread browsing load failed", ex);
+                SwingUtilities.invokeLater(() -> {
+                    threadsLoaded  = true; // don't retry-loop on every Apply
+                    threadsLoading = false;
+                    statusBar.hideSpinner();
+                    showAiTextUnavailableDialog("Conversation browsing", ex);
+                });
+            }
+        });
+    }
+
     public void applyFilters() {
         // Lazy document load (option b): the first time "Documents" is enabled, pull
         // document files in the background and re-apply once they're in allFiles.
         if (typeFilters.contains("document")) ensureDocumentsLoaded();
+        // Same pattern for conversation cards (Messages filter → AITT /threads).
+        if (typeFilters.contains("message")) ensureThreadsLoaded();
 
         // When the visible type set changes, rebuild the sidebar so its groups
         // (MIME, extension, …) match the types now shown in the grid.
@@ -720,6 +800,10 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         for (int idx : targets) {
             if (idx < 0 || idx >= visible.size()) continue;
             MediaFile mf = visible.get(idx);
+            // Conversation cards can't be tagged: the Autopsy tag would land on the
+            // artifact's SOURCE FILE (e.g. mmssms.db shared by hundreds of threads),
+            // silently mis-marking evidence. Menu disables this too — belt and braces.
+            if (mf.isThread()) continue;
             java.util.List<String> existing =
                     new java.util.ArrayList<>(mf.getAllTagNames());
 
@@ -1411,8 +1495,55 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         semanticOrder    = null;
         semanticLabel    = null;
         semanticSnippets = null;
+        removeThreadCards();
         if (semanticBar != null) semanticBar.hideBar();
         applyFilters();
+    }
+
+    /** Removes previously injected conversation cards from allFiles (EDT). */
+    private void removeThreadCards() {
+        if (threadCards.isEmpty()) return;
+        synchronized (allFiles) { allFiles.removeAll(threadCards); }
+        threadCards.clear();
+    }
+
+    /**
+     * Builds conversation cards for thread hits of a text search (runs OFF the
+     * EDT — resolves each artifact's source file from the case db) and returns
+     * them; the caller installs them on the EDT. Hits that can't be resolved are
+     * skipped (the search still shows the remaining results).
+     */
+    private java.util.List<MediaFile> buildThreadCards(
+            java.util.List<org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.TextHit> threadHits) {
+        java.util.List<MediaFile> cards = new java.util.ArrayList<>();
+        if (threadHits.isEmpty()) return cards;
+        try {
+            org.sleuthkit.datamodel.SleuthkitCase db =
+                    Case.getCurrentCaseThrows().getSleuthkitCase();
+            for (var h : threadHits) {
+                if (loadedThreadIds.contains(h.fileId())) continue; // already browsable
+                try {
+                    // h.fileId() is the ARTIFACT obj_id of the thread's first message.
+                    // Walk up the object tree to the nearest AbstractFile (mmssms.db,
+                    // .eml, mbox, …) to have a real file to hang the card on.
+                    org.sleuthkit.datamodel.Content c = db.getContentById(h.fileId());
+                    org.sleuthkit.datamodel.AbstractFile src = null;
+                    while (c != null) {
+                        if (c instanceof org.sleuthkit.datamodel.AbstractFile af) { src = af; break; }
+                        c = c.getParent();
+                    }
+                    if (src == null) continue;
+                    cards.add(MediaFile.forThread(src, h.fileId(),
+                            h.docKind(), h.docLabel(), h.docApp(), h.docParticipants(),
+                            h.docMsgCount(), h.docDateStart(), h.docDateEnd()));
+                } catch (Exception perHit) {
+                    logger.log(Level.FINE, "Thread card skipped for id " + h.fileId(), perHit);
+                }
+            }
+        } catch (Exception ex) {
+            logger.log(Level.WARNING, "Could not build conversation cards", ex);
+        }
+        return cards;
     }
 
     private void applySemanticHits(java.util.List<org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.Hit> hits,
@@ -1481,6 +1612,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             java.util.LinkedHashSet<Long> ids = new java.util.LinkedHashSet<>();
             java.util.List<Long> order = new java.util.ArrayList<>();
             java.util.Map<Long, String> snippets = new java.util.HashMap<>();
+            java.util.List<org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.TextHit>
+                    threadHits = new java.util.ArrayList<>();
             Exception[] fatal = { null };
             boolean[]   handled = { false }; // a specific dialog was already chosen
 
@@ -1492,6 +1625,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                         if (ids.add(h.fileId())) order.add(h.fileId());
                         if (h.snippet() != null && !h.snippet().isBlank())
                             snippets.putIfAbsent(h.fileId(), h.snippet());
+                        if (h.isThread()) threadHits.add(h);
                     }
                 } else {
                     var svc = org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.getInstance();
@@ -1533,12 +1667,21 @@ public class EnhancedGalleryTopComponent extends TopComponent {
 
             if (handled[0]) return;
 
+            // Resolve conversation cards while still off the EDT (case-db lookups).
+            final java.util.List<MediaFile> newCards = buildThreadCards(threadHits);
+
             final boolean hasResults = !order.isEmpty();
             final String label = q;
             final java.util.Map<Long, String> snipFinal = snippets.isEmpty() ? null : snippets;
             SwingUtilities.invokeLater(() -> {
                 statusBar.hideSpinner();
                 if (hasResults) {
+                    // Swap conversation cards: previous search's cards out, new in.
+                    removeThreadCards();
+                    if (!newCards.isEmpty()) {
+                        threadCards.addAll(newCards);
+                        allFiles.addAll(newCards);
+                    }
                     setSemanticResult(ids, order, snipFinal, label);
                 } else if (fatal[0] != null) {
                     if (textMode) showAiTextUnavailableDialog("Text search", fatal[0]);
@@ -1771,7 +1914,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             List<MediaFile> forSidebar = snap.stream()
                     .filter(mf -> dsId == null
                                || mf.getAbstractFile().getDataSourceObjectId() == dsId)
-                    .filter(mf -> ty.contains(mf.getMediaType().name().toLowerCase()))
+                    .filter(mf -> ty.contains(mf.isThread() ? "message"
+                                              : mf.getMediaType().name().toLowerCase()))
                     .collect(java.util.stream.Collectors.toList());
             groupSidebar.rebuild(forSidebar, grpBy, () -> {
                 if (rebuildOverlay != null) SwingUtilities.invokeLater(rebuildOverlay::hideOverlay);
@@ -1928,6 +2072,12 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     public void openFileExternally(int visibleIdx) {
         if (visibleIdx < 0 || visibleIdx >= visible.size()) return;
         MediaFile mf = visible.get(visibleIdx);
+        // Double-click on a conversation card opens the thread transcript, not the
+        // source file (opening mmssms.db externally would be useless and confusing).
+        if (mf.isThread()) {
+            showThreadTranscript(mf);
+            return;
+        }
         loaderPool.submit(() -> {
             try {
                 org.sleuthkit.autopsy.enhancedgallery.options.ExternalViewerService
@@ -1954,7 +2104,10 @@ public class EnhancedGalleryTopComponent extends TopComponent {
      */
     public void exportFiles(int rightClickedIdx) {
         // Resolve the target files on the EDT (indices → MediaFile), snapshotting now.
-        java.util.List<MediaFile> targets = contextTargets(rightClickedIdx);
+        // Conversation cards are skipped — exporting one would dump the whole source
+        // db (mmssms.db), which is not what "save this conversation" means.
+        java.util.List<MediaFile> targets = new ArrayList<>(contextTargets(rightClickedIdx));
+        targets.removeIf(MediaFile::isThread);
         if (targets.isEmpty()) return;
 
         JFileChooser chooser = new JFileChooser();
@@ -2184,6 +2337,136 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     /** Escapes for embedding inside a double-quoted JS string literal. */
     private static String escapeJs(String s) {
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ");
+    }
+
+    // ── Thread transcript view ────────────────────────────────────────────────
+
+    /**
+     * Fetches the full thread transcript from AITT ({@code /document}) and opens it
+     * as a LOCAL HTML page in the browser: chat threads render as left/right bubbles,
+     * e-mail threads as message blocks, anything else as preformatted text. The hit
+     * snippet (if any) is highlighted. All AITT failure modes are handled the same
+     * way as search (§8 of the handoff) — this never assumes the service exists.
+     */
+    private void showThreadTranscript(MediaFile mf) {
+        final String txtIdx = currentTextIndexDir();
+        if (txtIdx == null) return;
+        final long docId = mf.getId();
+        final String snippet = getSemanticSnippet(docId);
+
+        statusBar.startIndeterminate("Loading conversation transcript…");
+        loaderPool.submit(() -> {
+            try {
+                var tsvc = org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.getInstance();
+                tsvc.ensureRunning();
+                var doc = tsvc.document(docId, txtIdx);
+                java.nio.file.Path html = buildTranscriptHtml(doc, snippet);
+                java.awt.Desktop.getDesktop().browse(html.toUri());
+                SwingUtilities.invokeLater(statusBar::hideSpinner);
+            } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.DocumentNotFoundException nf) {
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    JOptionPane.showMessageDialog(this,
+                            "This conversation is not in the text index (was the case re-ingested?).",
+                            "Transcript", JOptionPane.WARNING_MESSAGE);
+                });
+            } catch (Exception ex) {
+                logger.log(Level.WARNING, "Transcript view failed", ex);
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    showAiTextUnavailableDialog("Conversation transcript", ex);
+                });
+            }
+        });
+    }
+
+    /** Chat line: {@code [2023-05-12 14:02] [in]/[out] sender: text}. */
+    private static final java.util.regex.Pattern CHAT_LINE = java.util.regex.Pattern.compile(
+            "^\\[(.+?)\\]\\s+\\[(in|out)\\]\\s*(.*?):\\s?(.*)$");
+
+    /** Writes the transcript HTML to the module temp dir and returns its path. */
+    private static java.nio.file.Path buildTranscriptHtml(
+            org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.DocumentText doc,
+            String snippet) throws java.io.IOException {
+
+        String title = doc.docLabel() == null || doc.docLabel().isBlank()
+                ? "Conversation" : doc.docLabel();
+        StringBuilder body = new StringBuilder();
+
+        if ("thread-chat".equals(doc.docKind())) {
+            // Bubbles: [in] left/grey, [out] right/blue; non-matching lines flow as system text.
+            for (String line : doc.text().split("\n")) {
+                if (line.isBlank()) continue;
+                var m = CHAT_LINE.matcher(line);
+                if (m.matches()) {
+                    boolean out = "out".equals(m.group(2));
+                    body.append("<div class='msg ").append(out ? "out" : "in").append("'>")
+                        .append("<div class='meta'>").append(escapeHtml(m.group(3)))
+                        .append(" · ").append(escapeHtml(m.group(1))).append("</div>")
+                        .append(highlight(escapeHtml(m.group(4)), snippet))
+                        .append("</div>\n");
+                } else {
+                    body.append("<div class='sys'>").append(highlight(escapeHtml(line), snippet))
+                        .append("</div>\n");
+                }
+            }
+        } else if ("thread-email".equals(doc.docKind())) {
+            // Blocks separated by "--- [date] From: …; To: …; ---" header lines.
+            for (String line : doc.text().split("\n")) {
+                if (line.startsWith("--- ")) {
+                    body.append("<div class='hdr'>").append(escapeHtml(line.replaceAll("^-+\\s*|\\s*-+$", "")))
+                        .append("</div>\n");
+                } else {
+                    body.append(highlight(escapeHtml(line), snippet)).append("<br>\n");
+                }
+            }
+        } else {
+            body.append("<pre>").append(highlight(escapeHtml(doc.text()), snippet)).append("</pre>");
+        }
+
+        String page = """
+            <!DOCTYPE html><html><head><meta charset="utf-8">
+            <title>TITLE</title>
+            <style>
+              body{font-family:Segoe UI,sans-serif;max-width:820px;margin:24px auto;
+                   padding:0 16px;background:#f4f5fa;color:#1e2532}
+              h2{font-size:18px;border-bottom:2px solid #c9cee0;padding-bottom:8px}
+              .msg{max-width:70%;margin:6px 0;padding:8px 12px;border-radius:12px;
+                   white-space:pre-wrap;word-wrap:break-word}
+              .in{background:#e4e7ee;margin-right:auto;border-bottom-left-radius:2px}
+              .out{background:#2563eb;color:#fff;margin-left:auto;border-bottom-right-radius:2px}
+              .msg.out{text-align:left}
+              .meta{font-size:11px;opacity:.7;margin-bottom:3px}
+              .sys{font-size:12px;color:#667;text-align:center;margin:10px 0}
+              .hdr{background:#dde3f0;border-left:4px solid #2563eb;padding:6px 10px;
+                   margin:18px 0 6px;font-size:12.5px;font-weight:600}
+              pre{white-space:pre-wrap;word-wrap:break-word}
+              mark{background:#ffe27a;padding:0 2px;border-radius:2px}
+            </style></head><body>
+            <h2>TITLE</h2>
+            <div style="display:flex;flex-direction:column">BODY</div>
+            </body></html>
+            """.replace("TITLE", escapeHtml(title)).replace("BODY", body.toString());
+
+        java.nio.file.Path dir = java.nio.file.Path.of(
+                System.getProperty("java.io.tmpdir"), "autopsy_enhanced_gallery");
+        java.nio.file.Files.createDirectories(dir);
+        java.nio.file.Path outFile = dir.resolve("thread_" + doc.fileId() + ".html");
+        java.nio.file.Files.writeString(outFile, page, java.nio.charset.StandardCharsets.UTF_8);
+        outFile.toFile().deleteOnExit();
+        return outFile;
+    }
+
+    /**
+     * Wraps occurrences of the (escaped) snippet in {@code <mark>}. Both arguments
+     * are already HTML-escaped; no-op when the snippet is absent or doesn't occur
+     * inside this fragment (a snippet can span bubbles — then nothing highlights).
+     */
+    private static String highlight(String escapedText, String snippet) {
+        if (snippet == null || snippet.isBlank()) return escapedText;
+        String esc = escapeHtml(snippet).trim();
+        if (esc.isEmpty() || !escapedText.contains(esc)) return escapedText;
+        return escapedText.replace(esc, "<mark>" + esc + "</mark>");
     }
 
     public void jumpToFirstUnseen() {

@@ -38,16 +38,68 @@ public class MediaFile {
     private volatile boolean thumbnailRequested = false;
     private volatile boolean thumbnailFailed    = false;  // true if decode was attempted and failed
 
+    // ── Message-thread fields (AITT Etap J) ─────────────────────────────────
+    // A "thread card" wraps the artifact's SOURCE FILE (e.g. mmssms.db, .eml) but
+    // its identity is the ARTIFACT obj_id — many threads can share one source
+    // file, so the file id must never be used as the card's key. Null for
+    // ordinary files.
+    private final Long   artifactObjId;
+    private final String docKind;   // "thread-chat" | "thread-email" | null
+    private final String docLabel;  // display label from AITT ("Chat (SMS): … (12 msgs)")
+    private final String docApp;    // "sms" | "whatsapp" | "email" | "" (normalized)
+    private final java.util.List<String> docParticipants; // normalized, may be empty
+    private final int    docMsgCount;
+    private final String docDateStart, docDateEnd; // ISO-8601 UTC or ""
+
     // ── Constructor ─────────────────────────────────────────────────────────
     public MediaFile(AbstractFile abstractFile, MediaType mediaType) {
+        this(abstractFile, mediaType, null, null, null, null, null, 0, null, null);
+    }
+
+    private MediaFile(AbstractFile abstractFile, MediaType mediaType,
+                      Long artifactObjId, String docKind, String docLabel, String docApp,
+                      java.util.List<String> docParticipants, int docMsgCount,
+                      String docDateStart, String docDateEnd) {
         this.abstractFile   = abstractFile;
         this.mediaType      = mediaType;
+        this.artifactObjId  = artifactObjId;
+        this.docKind        = docKind;
+        this.docLabel       = docLabel;
+        this.docApp         = docApp;
+        this.docParticipants = docParticipants == null
+                ? java.util.List.of() : java.util.List.copyOf(docParticipants);
+        this.docMsgCount    = docMsgCount;
+        this.docDateStart   = docDateStart;
+        this.docDateEnd     = docDateEnd;
         // Cache path at construction time — avoids repeated DB calls during grouping/filtering
         String path = abstractFile.getName();
         try { path = abstractFile.getUniquePath(); } catch (Exception ignored) {}
         this.uniquePathCache = path;
         this.dataSourceName  = extractDataSource(abstractFile, path);
     }
+
+    /**
+     * Creates a "conversation card" for a message thread indexed by AI Text Triage:
+     * wraps the artifact's source file for display/plumbing, but identifies as the
+     * artifact obj_id (see {@link #getId}).
+     */
+    public static MediaFile forThread(AbstractFile sourceFile, long artifactObjId,
+                                      String docKind, String docLabel, String docApp,
+                                      java.util.List<String> participants, int msgCount,
+                                      String dateStart, String dateEnd) {
+        return new MediaFile(sourceFile, MediaType.DOCUMENT, artifactObjId,
+                docKind, docLabel, docApp, participants, msgCount, dateStart, dateEnd);
+    }
+
+    /** True when this is a conversation card (message thread), not a real file. */
+    public boolean isThread()          { return artifactObjId != null; }
+    public String  getDocKind()        { return docKind  == null ? "" : docKind; }
+    public String  getDocLabel()       { return docLabel == null ? "" : docLabel; }
+    public String  getDocApp()         { return docApp   == null ? "" : docApp; }
+    public java.util.List<String> getDocParticipants() { return docParticipants; }
+    public int     getDocMsgCount()    { return docMsgCount; }
+    public String  getDocDateStart()   { return docDateStart == null ? "" : docDateStart; }
+    public String  getDocDateEnd()     { return docDateEnd   == null ? "" : docDateEnd; }
 
     private static String extractDataSource(AbstractFile af, String cachedPath) {
         // First segment of unique path is always the data source name
@@ -78,13 +130,17 @@ public class MediaFile {
 
     // ── Accessors ───────────────────────────────────────────────────────────
     public AbstractFile getAbstractFile()   { return abstractFile; }
-    public long         getId()             { return abstractFile.getId(); }
-    public String       getName()           { return abstractFile.getName(); }
+    /** Card identity: the artifact obj_id for threads, the file obj_id otherwise. */
+    public long         getId()             { return artifactObjId != null ? artifactObjId
+                                                                            : abstractFile.getId(); }
+    public String       getName()           { return isThread() && docLabel != null && !docLabel.isBlank()
+                                                     ? docLabel : abstractFile.getName(); }
     public long         getSize()           { return abstractFile.getSize(); }
     public String       getMimeType()       { return abstractFile.getMIMEType(); }
     public MediaType    getMediaType()      { return mediaType; }
     public String       getUniquePath()      { return uniquePathCache; }
     public String       getExtension() {
+        if (isThread()) return docApp != null && !docApp.isBlank() ? docApp : "msg";
         String n = abstractFile.getName();
         int dot = n.lastIndexOf('.');
         return dot >= 0 ? n.substring(dot + 1).toLowerCase() : "";
@@ -154,7 +210,10 @@ public class MediaFile {
                                   java.util.Set<String> typeSet,
                                   boolean geoOnly,
                                   GpsCache gpsCache) {
-        if (!typeSet.contains(mediaType.name().toLowerCase())) return false;
+        // Conversation cards have their own type key ("message") so the Messages
+        // checkbox — not Documents — controls their visibility.
+        String typeKey = isThread() ? "message" : mediaType.name().toLowerCase();
+        if (!typeSet.contains(typeKey)) return false;
         // Overlapping buckets: show the file if any of its buckets is selected
         boolean statusMatch = getFilterBuckets().stream().anyMatch(statusBuckets::contains);
         if (!statusMatch)                                      return false;

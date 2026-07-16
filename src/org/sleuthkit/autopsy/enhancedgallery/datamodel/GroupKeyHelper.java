@@ -17,15 +17,28 @@ public final class GroupKeyHelper {
         if (groupBy == null) groupBy = "path";
         return switch (groupBy.toLowerCase()) {
             case "format", "extension" -> {
+                // Conversation cards group by messaging app (SMS/WHATSAPP/EMAIL…)
                 String ext = mf.getExtension().toUpperCase();
                 yield ext.isEmpty() ? "(no extension)" : ext;
             }
             case "mime", "mime type" -> {
+                if (mf.isThread()) yield "message/" + (mf.getDocApp().isBlank() ? "thread" : mf.getDocApp());
                 String mime = mf.getMimeType();
                 yield (mime != null && !mime.isBlank()) ? mime : "(unknown)";
             }
-            case "date", "modified" ->
-                new SimpleDateFormat("yyyy-MM-dd").format(new Date(mf.getMtimeMillis()));
+            case "participants" -> {
+                if (!mf.isThread()) yield "(not a conversation)";
+                java.util.List<String> p = new java.util.ArrayList<>(mf.getDocParticipants());
+                if (p.isEmpty()) yield "(unknown participants)";
+                java.util.Collections.sort(p);
+                yield String.join(" ↔ ", p);
+            }
+            case "date", "modified" -> {
+                // A thread's own time range beats the source file's mtime
+                // (mmssms.db mtime says nothing about the conversation's date).
+                if (mf.isThread()) yield threadMonth(mf);
+                yield new SimpleDateFormat("yyyy-MM-dd").format(new Date(mf.getMtimeMillis()));
+            }
             case "accessed" -> {
                 long t = mf.getAbstractFile().getAtime();
                 yield t > 0 ? new SimpleDateFormat("yyyy-MM-dd").format(new Date(t * 1000L))
@@ -50,11 +63,18 @@ public final class GroupKeyHelper {
         };
     }
 
+    /** Month bucket (yyyy-MM) from the thread's ISO-8601 date_start, or "(unknown)". */
+    private static String threadMonth(MediaFile mf) {
+        String iso = mf.getDocDateStart();
+        return (iso != null && iso.length() >= 7) ? iso.substring(0, 7) : "(unknown date)";
+    }
+
     public static String displayName(String groupBy) {
         if (groupBy == null) return "Paths";
         return switch (groupBy.toLowerCase()) {
             case "format", "extension" -> "Extensions";
             case "mime", "mime type"   -> "MIME types";
+            case "participants"        -> "Participants";
             case "date", "modified"    -> "Modified dates";
             case "accessed"            -> "Accessed dates";
             case "created"             -> "Created dates";

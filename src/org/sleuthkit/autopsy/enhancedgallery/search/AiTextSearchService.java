@@ -61,8 +61,30 @@ public final class AiTextSearchService {
      * One document search/similar hit: Autopsy obj_id, best matching chunk index,
      * cosine-similarity score, and a short snippet of the matched text (may be
      * empty — always handle defensively).
+     *
+     * <p>For MESSAGE THREADS (AITT Etap J) the hit additionally carries structured
+     * thread metadata; {@code docKind} is {@code ""} for plain files,
+     * {@code "thread-chat"} (SMS/messenger) or {@code "thread-email"} for threads.
+     * For a thread, {@code fileId} is the obj_id of the thread's first message
+     * ARTIFACT (TSK_MESSAGE/TSK_EMAIL_MSG) — not an AbstractFile. Metadata fields
+     * are only populated by ingests done with AITT ≥ 1.7 (empty otherwise).
      */
-    public record TextHit(long fileId, int chunkIdx, double score, String snippet) {}
+    public record TextHit(long fileId, int chunkIdx, double score, String snippet,
+                          String docKind, String docLabel, String docApp,
+                          List<String> docParticipants, int docMsgCount,
+                          String docDateStart, String docDateEnd) {
+
+        /** True when this hit is a message thread (chat or e-mail), not a file. */
+        public boolean isThread() { return docKind != null && !docKind.isEmpty(); }
+    }
+
+    /** Full text of a document/thread from {@code /document} (transcript view). */
+    public record DocumentText(long fileId, String docKind, String docLabel, String text) {}
+
+    /** Thrown by {@link #document} when the id is not in the index (HTTP 404). */
+    public static final class DocumentNotFoundException extends IOException {
+        public DocumentNotFoundException(String msg) { super(msg); }
+    }
 
     /** Thrown by {@link #search} when the embedder is a stub / has no weights (HTTP 503). */
     public static final class EmbedderUnavailableException extends IOException {
@@ -155,6 +177,22 @@ public final class AiTextSearchService {
         } finally { c.disconnect(); }
     }
 
+    /**
+     * Lists ALL indexed message threads (metadata only, no chunk texts) — used to
+     * browse/group conversations in the gallery without running a search. Reuses
+     * the hit shape: score/chunkIdx/snippet are zero/empty. Empty index → empty list.
+     */
+    public List<TextHit> threads(String indexDir) throws IOException {
+        String url = BASE + "/threads?index_dir=" + enc(indexDir);
+        HttpURLConnection c = open(url, "GET", SEARCH_TIMEOUT_MS);
+        try {
+            int code = c.getResponseCode();
+            checkErrorCode(code, c);
+            if (code != 200) throw new IOException("/threads returned HTTP " + code);
+            return parseHits(readBody(c));
+        } finally { c.disconnect(); }
+    }
+
     /** Similar-document lookup by file obj_id (excludes the file itself). */
     public List<TextHit> similar(long fileId, String indexDir, int topN) throws IOException {
         String url = BASE + "/similar?file_id=" + fileId
@@ -208,16 +246,60 @@ public final class AiTextSearchService {
                     if (fid instanceof Number n) {
                         Object ci = m.get("chunk_idx");
                         Object sc = m.get("score");
-                        Object sn = m.get("snippet");
                         int    chunk   = (ci instanceof Number cn) ? cn.intValue() : 0;
                         double score   = (sc instanceof Number sn2) ? sn2.doubleValue() : 0.0;
-                        String snippet = (sn != null) ? sn.toString() : "";
-                        hits.add(new TextHit(n.longValue(), chunk, score, snippet));
+                        Object mc = m.get("doc_msg_count");
+                        hits.add(new TextHit(n.longValue(), chunk, score,
+                                str(m, "snippet"),
+                                str(m, "doc_kind"), str(m, "doc_label"), str(m, "doc_app"),
+                                strList(m.get("doc_participants")),
+                                (mc instanceof Number mn) ? mn.intValue() : 0,
+                                str(m, "doc_date_start"), str(m, "doc_date_end")));
                     }
                 }
             }
         }
         return hits;
+    }
+
+    private static String str(Map<?, ?> m, String key) {
+        Object v = m.get(key);
+        return v != null ? v.toString() : "";
+    }
+
+    private static List<String> strList(Object v) {
+        List<String> out = new ArrayList<>();
+        if (v instanceof List<?> l) {
+            for (Object o : l) if (o != null) out.add(o.toString());
+        }
+        return out;
+    }
+
+    /**
+     * Fetches the full text of a document/thread ({@code /document}) for the
+     * transcript view. For a thread, {@code fileId} is the artifact obj_id of the
+     * thread's first message — the same id the search hit carried.
+     *
+     * @throws DocumentNotFoundException when the id is not in the index (404)
+     */
+    public DocumentText document(long fileId, String indexDir) throws IOException {
+        String url = BASE + "/document?file_id=" + fileId + "&index_dir=" + enc(indexDir);
+        HttpURLConnection c = open(url, "GET", SEARCH_TIMEOUT_MS);
+        try {
+            int code = c.getResponseCode();
+            if (code == 404) {
+                String detail = readErrorDetail(c);
+                throw new DocumentNotFoundException(detail != null ? detail
+                        : "Document not found in the text index.");
+            }
+            checkErrorCode(code, c);
+            if (code != 200) throw new IOException("/document returned HTTP " + code);
+            Map<String, Object> root = MiniJson.parseObject(readBody(c));
+            Object fid = root.get("file_id");
+            return new DocumentText(
+                    (fid instanceof Number n) ? n.longValue() : fileId,
+                    str(root, "doc_kind"), str(root, "doc_label"), str(root, "text"));
+        } finally { c.disconnect(); }
     }
 
     private static HttpURLConnection open(String url, String method, int timeoutMs) throws IOException {

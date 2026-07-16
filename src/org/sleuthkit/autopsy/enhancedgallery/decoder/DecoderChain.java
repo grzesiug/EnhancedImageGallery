@@ -62,6 +62,11 @@ public class DecoderChain {
         if (mf.getMediaType() == MediaFile.MediaType.AUDIO) {
             return renderAudioPlaceholder(f.getName());
         }
+        // Conversation cards (message threads) get a chat-bubble tile — no file
+        // content is involved at all (the "file" is the thread's source db/eml).
+        if (mf.isThread()) {
+            return renderConversationPlaceholder(mf.getDocApp(), mf.getDocMsgCount());
+        }
         // Documents show an icon+extension placeholder, never a rendered preview —
         // no extraction, no external tool, no size limit (Phase 2 may add real text thumbs).
         if (mf.getMediaType() == MediaFile.MediaType.DOCUMENT) {
@@ -553,6 +558,51 @@ public class DecoderChain {
         java.awt.FontMetrics fm = g.getFontMetrics();
         int tw = fm.stringWidth(label);
         g.drawString(label, px + (pw - tw) / 2, py + ph / 2 + fm.getAscent() / 2);
+
+        g.dispose();
+        return img;
+    }
+
+    /**
+     * A conversation-card tile for a message thread: two chat bubbles on a slate
+     * background, the app name (SMS/WHATSAPP/EMAIL) and the message count.
+     */
+    private static BufferedImage renderConversationPlaceholder(String app, int msgCount) {
+        BufferedImage img = new BufferedImage(THUMB_SIZE, THUMB_SIZE, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING,
+                RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+        g.setColor(new java.awt.Color(24, 32, 44));
+        g.fillRect(0, 0, THUMB_SIZE, THUMB_SIZE);
+
+        // Incoming bubble (left, grey) and outgoing bubble (right, blue)
+        int bw = THUMB_SIZE * 5 / 9, bh = THUMB_SIZE / 5, r = 14;
+        int lx = THUMB_SIZE / 9,      ly = THUMB_SIZE / 4;
+        int rx = THUMB_SIZE - bw - THUMB_SIZE / 9, ry = ly + bh + THUMB_SIZE / 12;
+        g.setColor(new java.awt.Color(78, 88, 104));
+        g.fillRoundRect(lx, ly, bw, bh, r, r);
+        g.fillPolygon(new int[]{lx + 8, lx + 22, lx + 8},
+                      new int[]{ly + bh, ly + bh, ly + bh + 9}, 3);
+        g.setColor(new java.awt.Color(37, 99, 235));
+        g.fillRoundRect(rx, ry, bw, bh, r, r);
+        g.fillPolygon(new int[]{rx + bw - 8, rx + bw - 22, rx + bw - 8},
+                      new int[]{ry + bh, ry + bh, ry + bh + 9}, 3);
+
+        // App label + message count
+        String label = (app == null || app.isBlank()) ? "MESSAGES" : app.toUpperCase();
+        g.setColor(new java.awt.Color(203, 213, 225));
+        g.setFont(new java.awt.Font("SansSerif", java.awt.Font.BOLD, 22));
+        java.awt.FontMetrics fm = g.getFontMetrics();
+        g.drawString(label, (THUMB_SIZE - fm.stringWidth(label)) / 2, THUMB_SIZE - 48);
+        if (msgCount > 0) {
+            String cnt = msgCount + (msgCount == 1 ? " message" : " messages");
+            g.setFont(new java.awt.Font("SansSerif", java.awt.Font.PLAIN, 16));
+            fm = g.getFontMetrics();
+            g.setColor(new java.awt.Color(148, 163, 184));
+            g.drawString(cnt, (THUMB_SIZE - fm.stringWidth(cnt)) / 2, THUMB_SIZE - 24);
+        }
 
         g.dispose();
         return img;

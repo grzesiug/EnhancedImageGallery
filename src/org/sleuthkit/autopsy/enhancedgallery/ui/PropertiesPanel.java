@@ -164,6 +164,21 @@ public class PropertiesPanel extends JPanel {
             addRow("Snippet", "…" + snippet + "…");
         }
 
+        // ── Conversation (message-thread card from AITT) ──────────────────────
+        if (mf.isThread()) {
+            section("Conversation");
+            addRow("Thread", mf.getDocLabel());
+            addRow("App", mf.getDocApp().isBlank() ? "—" : mf.getDocApp());
+            java.util.List<String> parts = mf.getDocParticipants();
+            addRow("Participants", parts.isEmpty() ? "—" : String.join(", ", parts));
+            if (mf.getDocMsgCount() > 0)
+                addRow("Messages", String.valueOf(mf.getDocMsgCount()));
+            String ds = mf.getDocDateStart(), de = mf.getDocDateEnd();
+            if (!ds.isBlank() || !de.isBlank())
+                addRow("Date range", (ds.isBlank() ? "?" : ds) + "  →  " + (de.isBlank() ? "?" : de));
+            addRow("Source file", af.getName());
+        }
+
         // ── Basic file info ───────────────────────────────────────────────────
         section("File Info");
         addRow("Name",      af.getName());

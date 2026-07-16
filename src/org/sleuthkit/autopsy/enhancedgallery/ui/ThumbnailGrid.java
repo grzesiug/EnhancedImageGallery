@@ -272,8 +272,14 @@ public class ThumbnailGrid extends JScrollPane {
             similar.addActionListener(ev -> parent.runFindSimilar(idx));
             m.add(similar);
 
-            JMenuItem open = new JMenuItem("Open externally", MenuIcons.openExternal(14));
+            boolean isThread = idx >= 0 && idx < files.size() && files.get(idx).isThread();
+            JMenuItem open = new JMenuItem(
+                    isThread ? "View conversation" : "Open externally",
+                    MenuIcons.openExternal(14));
             open.setEnabled(!multi); // single-file action
+            open.setToolTipText(isThread
+                    ? "Open the full message-thread transcript in the browser"
+                    : null);
             open.addActionListener(ev -> parent.openFileExternally(idx));
             m.add(open);
 
@@ -281,7 +287,10 @@ public class ThumbnailGrid extends JScrollPane {
             JMenuItem export = new JMenuItem(selCount > 1
                     ? "Save " + selCount + " files to disk…" : "Save to disk…",
                     MenuIcons.save(14));
-            export.setToolTipText("Extract the selected file(s) to a folder on disk (original bytes)");
+            export.setEnabled(!isThread);
+            export.setToolTipText(isThread
+                    ? "Conversations can't be saved as files (view the transcript instead)"
+                    : "Extract the selected file(s) to a folder on disk (original bytes)");
             export.addActionListener(ev -> parent.exportFiles(idx));
             m.add(export);
 
@@ -302,6 +311,14 @@ public class ThumbnailGrid extends JScrollPane {
             m.addSeparator();
             JMenu tagMenu = new JMenu("Tag");
             tagMenu.setIcon(new TagIcon(14));
+            if (isThread) {
+                // Tagging a thread would write the Autopsy tag onto the artifact's
+                // SOURCE FILE (e.g. mmssms.db shared by hundreds of conversations),
+                // silently mis-marking evidence — disabled until artifact tags exist.
+                tagMenu.setEnabled(false);
+                tagMenu.setToolTipText("Conversations can't be tagged (the tag would land "
+                        + "on the shared source file, e.g. the whole SMS database)");
+            }
             // Same grouping/sorting as the top Tag ▾ button: automated AI tags first
             // (blue), then custom tags, built-in standard tags, then child-exploitation.
             java.util.List<String> aiTags    = parent.aiTagsSorted();
