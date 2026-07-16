@@ -186,3 +186,35 @@ Stan OBECNY w EEG (`EnhancedGalleryTopComponent.runSemanticSearch` +
 Zasada dla kart konwersacji: **każda ścieżka do AITT musi być owinięta w tę samą
 obsługę** (moduł może nie istnieć / serwis może nie odpowiadać) — nigdy nie
 zakładać, że `/search`//`document` są dostępne.
+
+---
+
+## 9. „Group by Contact" — zaakceptowany projekt (do zrobienia, EEG)
+
+Życzenie użytkownika (2026-07-16): dziś „Participants" grupuje po CAŁYM zbiorze
+uczestników (`A ↔ B` = jedna grupa); brakuje grupowania **per pojedynczy kontakt**
+(adres e-mail / numer / inne ID) — „pokaż wszystkie konwersacje, w których
+występuje X", żeby wybrać, którą przeglądać, i łatwo dotrzeć do źródła.
+Konwersacje mają ZOSTAĆ w całości (to zaleta, nie dzielić).
+
+UX (mockup zaakceptowany przez użytkownika):
+- Dropdown grup: nowa pozycja **„Contact"**. Sidebar = lista kontaktów
+  (znormalizowane `doc_participants`) + liczba konwersacji; pozycja „(all)"
+  i „(unknown participants)" dla wątków bez rozpoznanych kont.
+- **Multi-membership**: wątek z uczestnikami {A,B} pojawia się w grupie A ORAZ B.
+  To zmiana silnika grupowania: `GroupKeyHelper.keyOf → String` nie wystarcza —
+  potrzebne `keysOf(mf, groupBy) → List<String>` (dla pozostałych trybów lista
+  1-elementowa); GroupSidebar buduje grupy po wszystkich kluczach, applyFilters
+  przepuszcza kafel, gdy KTÓRYKOLWIEK klucz pasuje. Liczniki w sidebarze liczą
+  wątki per kontakt (suma > liczba wątków — to poprawne).
+- Karty w grupie sortowane po `doc_date_start` malejąco (najnowsza konwersacja
+  pierwsza).
+- **Menu kontekstowe karty wątku** (dotarcie do źródła): „View conversation"
+  (istniejące F4), **„Open source file"** (otwarcie pliku źródłowego artefaktu,
+  jak dwuklik na zwykłym pliku), **„Show source in case tree"** (nawigacja w
+  drzewie Autopsy — `DirectoryTreeTopComponent`/`viewContent` API),
+  **„Show all from this contact"** (skrót: przełącza grupowanie na Contact
+  i zaznacza kontakt — przy >1 uczestniku małe submenu z listą).
+
+Dane: komplet już płynie (`doc_participants` znormalizowane po stronie AITT,
+§1/§7) — zero zmian kontraktu. Czysta funkcja EEG.
