@@ -237,7 +237,10 @@ public class PropertiesPanel extends JPanel {
         // investigator sees here matches exactly what Autopsy shows for the tag.
         // Same EDT DB-query pattern already used below for EXIF; guarded so it
         // never breaks the panel.
-        try {
+        // SKIPPED for conversation cards: the query targets the thread's SOURCE
+        // FILE (e.g. mmssms.db), whose tags aren't the thread's — and the file
+        // can carry thousands of message artifacts, making EDT queries visibly lag.
+        if (!mf.isThread()) try {
             var tm = org.sleuthkit.autopsy.casemodule.Case.getCurrentCaseThrows()
                     .getServices().getTagsManager();
             java.util.List<org.sleuthkit.datamodel.ContentTag> commented =
@@ -270,8 +273,11 @@ public class PropertiesPanel extends JPanel {
             }
         }
 
-        // Load EXIF + GPS artifacts (may update artifactLat/Lon)
-        loadExifFromBlackboard(af);
+        // Load EXIF + GPS artifacts (may update artifactLat/Lon).
+        // SKIPPED for conversation cards: EXIF/GPS is meaningless for a thread, and
+        // getAllArtifacts() on the source db (thousands of TSK_MESSAGE artifacts)
+        // is exactly the click lag the user reported.
+        if (!mf.isThread()) loadExifFromBlackboard(af);
 
         boolean showMaps = hasGps || (!Double.isNaN(artifactLat) && !Double.isNaN(artifactLon));
         removeTagBtn.setVisible(mf.isTagged());
