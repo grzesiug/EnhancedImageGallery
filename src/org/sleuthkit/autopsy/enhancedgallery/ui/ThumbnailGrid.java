@@ -190,9 +190,13 @@ public class ThumbnailGrid extends JScrollPane {
             if (idx < 0 || idx >= files.size()) return null;
             MediaFile mf = files.get(idx);
             String snip = parent.getSemanticSnippet(mf.getId());
-            if (snip == null) return null;
-            return "<html><body style='width:320px'><b>" + escapeHtml(mf.getName())
-                    + "</b><br>…" + escapeHtml(snip) + "…</body></html>";
+            String ts   = parent.getSemanticTimestamp(mf.getId());
+            if (snip == null && ts == null) return null;
+            StringBuilder sb = new StringBuilder("<html><body style='width:320px'><b>")
+                    .append(escapeHtml(mf.getName())).append("</b>");
+            if (ts != null)   sb.append("<br>Matched frame at <b>").append(ts).append("</b>");
+            if (snip != null) sb.append("<br>…").append(escapeHtml(snip)).append("…");
+            return sb.append("</body></html>").toString();
         }
 
         private String escapeHtml(String s) {
@@ -556,6 +560,14 @@ public class ThumbnailGrid extends JScrollPane {
                 int fontSize = Math.max(8, Math.min(14, thumbSize / 10));
                 int badgeH   = fontSize + 6; // same as paintBadge height
                 paintVideoIndicator(g, x + 3, y + 3 + badgeH + 2);
+                // Matched-frame time of a visual AI hit ("▶ 03:24") — tells the
+                // analyst WHERE in the video the match is, right on the tile.
+                String ts = parent.getSemanticTimestamp(mf.getId());
+                if (ts != null) {
+                    int indSz = Math.max(14, Math.min(22, thumbSize / 7));
+                    paintBadge(g, "▶ " + ts, new Color(0x7A1FA2),
+                            x + 3, y + 3 + badgeH + 2 + indSz + 2);
+                }
             }
 
             // ── Tag badges (top-right, stacked downward, one per tag) ──────────

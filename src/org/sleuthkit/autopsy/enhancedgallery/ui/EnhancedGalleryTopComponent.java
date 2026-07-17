@@ -99,6 +99,10 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     // Matched-text snippets from a document (BGE-M3) search, keyed by obj_id — shown
     // in the tile tooltip and PropertiesPanel. Null for visual (CLIP) searches.
     private volatile java.util.Map<Long, String> semanticSnippets = null;
+    // Matched-frame timestamps from a visual (CLIP per-frame) search, keyed by
+    // obj_id — tells the analyst WHERE in a video the hit is. Null when inactive;
+    // only videos (timestamp > 0) are stored.
+    private volatile java.util.Map<Long, Double> semanticTimestamps = null;
     // Conversation cards (message threads from AITT) injected into allFiles for the
     // DURATION OF A TEXT SEARCH only — removed when the search is cleared/replaced.
     // Their MediaFile identity is the thread's artifact obj_id (see MediaFile.forThread).
@@ -306,6 +310,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         semanticMatchIds = null;  // and any leftover AI result from the previous open
         semanticOrder    = null;
         semanticSnippets = null;
+        semanticTimestamps = null;
         semanticLabel    = null;
         if (semanticBar != null) semanticBar.hideBar();
         SwingUtilities.invokeLater(() -> { if (actionBar != null) actionBar.resetGroupBy(); });
@@ -1489,6 +1494,25 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         return true; // katalog niepusty, ale bez rozpoznawalnego indeksu - nie blokuj
     }
 
+    /**
+     * Matched-frame time for a video hit of the last visual search, formatted as
+     * mm:ss (or h:mm:ss), or null when not a video hit / no visual search active.
+     */
+    public String getSemanticTimestamp(long objId) {
+        java.util.Map<Long, Double> t = semanticTimestamps;
+        if (t == null) return null;
+        Double s = t.get(objId);
+        return s == null ? null : formatSeconds(s);
+    }
+
+    /** 204 → "03:24"; 3725 → "1:02:05". */
+    static String formatSeconds(double seconds) {
+        long total = Math.round(seconds);
+        long h = total / 3600, m = (total % 3600) / 60, s = total % 60;
+        return h > 0 ? String.format("%d:%02d:%02d", h, m, s)
+                     : String.format("%02d:%02d", m, s);
+    }
+
     /** Matched-text snippet for a document hit (from the last text search), or null. */
     public String getSemanticSnippet(long objId) {
         java.util.Map<Long, String> s = semanticSnippets;
@@ -1510,6 +1534,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         semanticOrder    = null;
         semanticLabel    = null;
         semanticSnippets = null;
+        semanticTimestamps = null;
         removeThreadCards();
         if (semanticBar != null) semanticBar.hideBar();
         applyFilters();
@@ -1565,20 +1590,32 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                                    String label) {
         java.util.LinkedHashSet<Long> ids = new java.util.LinkedHashSet<>();
         java.util.List<Long> order = new java.util.ArrayList<>();
-        for (var h : hits) { if (ids.add(h.fileId())) order.add(h.fileId()); }
-        setSemanticResult(ids, order, null, label); // visual search — no text snippets
+        java.util.Map<Long, Double> ts = new java.util.HashMap<>();
+        for (var h : hits) {
+            if (ids.add(h.fileId())) order.add(h.fileId());
+            if (h.timestampSeconds() > 0) ts.putIfAbsent(h.fileId(), h.timestampSeconds());
+        }
+        setSemanticResult(ids, order, null, ts.isEmpty() ? null : ts, label);
+    }
+
+    private void setSemanticResult(java.util.Set<Long> ids, java.util.List<Long> order,
+                                   java.util.Map<Long, String> snippets, String label) {
+        setSemanticResult(ids, order, snippets, null, label);
     }
 
     /**
      * Installs a ranked AI result set (visual and/or document) as the active grid
-     * filter. {@code snippets} is non-null only for document (text) searches.
+     * filter. {@code snippets} is non-null only for document (text) searches;
+     * {@code timestamps} only for visual searches with video-frame hits.
      */
     private void setSemanticResult(java.util.Set<Long> ids, java.util.List<Long> order,
-                                   java.util.Map<Long, String> snippets, String label) {
-        semanticMatchIds = ids;
-        semanticOrder    = order;
-        semanticSnippets = snippets;
-        semanticLabel    = label;
+                                   java.util.Map<Long, String> snippets,
+                                   java.util.Map<Long, Double> timestamps, String label) {
+        semanticMatchIds   = ids;
+        semanticOrder      = order;
+        semanticSnippets   = snippets;
+        semanticTimestamps = timestamps;
+        semanticLabel      = label;
         if (semanticBar != null) semanticBar.showBar(label, ids.size());
         applyFilters();
     }
@@ -1627,6 +1664,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             java.util.LinkedHashSet<Long> ids = new java.util.LinkedHashSet<>();
             java.util.List<Long> order = new java.util.ArrayList<>();
             java.util.Map<Long, String> snippets = new java.util.HashMap<>();
+            java.util.Map<Long, Double> timestamps = new java.util.HashMap<>();
             java.util.List<org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.TextHit>
                     threadHits = new java.util.ArrayList<>();
             Exception[] fatal = { null };
@@ -1647,6 +1685,8 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                     svc.ensureRunning();
                     for (var h : svc.search(q, idxDir, topN)) {
                         if (ids.add(h.fileId())) order.add(h.fileId());
+                        if (h.timestampSeconds() > 0)
+                            timestamps.putIfAbsent(h.fileId(), h.timestampSeconds());
                     }
                 }
             } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.ClipDisabledException ce) {
@@ -1699,6 +1739,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
             final boolean hasResults = !order.isEmpty();
             final String label = q;
             final java.util.Map<Long, String> snipFinal = snippets.isEmpty() ? null : snippets;
+            final java.util.Map<Long, Double> tsFinal   = timestamps.isEmpty() ? null : timestamps;
             SwingUtilities.invokeLater(() -> {
                 statusBar.hideSpinner();
                 if (hasResults) {
@@ -1708,7 +1749,7 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                         threadCards.addAll(newCards);
                         allFiles.addAll(newCards);
                     }
-                    setSemanticResult(ids, order, snipFinal, label);
+                    setSemanticResult(ids, order, snipFinal, tsFinal, label);
                 } else if (fatal[0] != null) {
                     if (textMode) showAiTextUnavailableDialog("Text search", fatal[0]);
                     else          showAiUnavailableDialog("AI search", fatal[0]);

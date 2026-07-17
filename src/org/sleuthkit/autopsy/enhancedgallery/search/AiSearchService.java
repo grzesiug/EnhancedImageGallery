@@ -57,8 +57,12 @@ public final class AiSearchService {
 
     // ── Result type ───────────────────────────────────────────────────────────
 
-    /** One search/similar hit: Autopsy obj_id + cosine-similarity score. */
-    public record Hit(long fileId, double score) {}
+    /**
+     * One search/similar hit. Since AI Image Triage 1.1 the CLIP index holds one
+     * vector per VIDEO FRAME; results are deduplicated per file (best frame wins)
+     * and carry the matched frame: images have {@code frameIdx=0, timestampSeconds=0}.
+     */
+    public record Hit(long fileId, double score, int frameIdx, double timestampSeconds) {}
 
     /** Thrown by {@link #search} when the service has CLIP disabled (HTTP 503). */
     public static final class ClipDisabledException extends IOException {
@@ -206,7 +210,11 @@ public final class AiSearchService {
                     Object sc  = m.get("score");
                     if (fid instanceof Number n) {
                         double score = (sc instanceof Number sn) ? sn.doubleValue() : 0.0;
-                        hits.add(new Hit(n.longValue(), score));
+                        Object fi = m.get("frame_idx");
+                        Object ts = m.get("timestamp_seconds");
+                        hits.add(new Hit(n.longValue(), score,
+                                (fi instanceof Number fn) ? fn.intValue() : 0,
+                                (ts instanceof Number tn) ? tn.doubleValue() : 0.0));
                     }
                 }
             }

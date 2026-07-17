@@ -159,9 +159,11 @@ public class PropertiesPanel extends JPanel {
         // ── Matched text (document text search) ───────────────────────────────
         // Shown at the top so the analyst immediately sees WHY this document matched.
         String snippet = parent.getSemanticSnippet(af.getId());
-        if (snippet != null) {
-            section("Matched text");
-            addRow("Snippet", "…" + snippet + "…");
+        String matchTs = parent.getSemanticTimestamp(mf.getId());
+        if (snippet != null || matchTs != null) {
+            section("Matched " + (matchTs != null ? "frame" : "text"));
+            if (matchTs != null) addRow("Time in video", matchTs);
+            if (snippet != null) addRow("Snippet", "…" + snippet + "…");
         }
 
         // ── Conversation (message-thread card from AITT) ──────────────────────
