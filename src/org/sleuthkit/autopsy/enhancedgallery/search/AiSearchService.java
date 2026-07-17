@@ -65,6 +65,16 @@ public final class AiSearchService {
         public ClipDisabledException(String msg) { super(msg); }
     }
 
+    /**
+     * Thrown by {@link #search}/{@link #similar} when the CLIP index was built with
+     * an older ID scheme than the running service (HTTP 409, e.g. v1 file ids vs
+     * packed_frame_v2). The message carries the service's own instruction — delete
+     * the index files and re-run ingest — so show it to the user verbatim.
+     */
+    public static final class IndexOutdatedException extends IOException {
+        public IndexOutdatedException(String msg) { super(msg); }
+    }
+
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
     public boolean isHealthy() {
@@ -132,11 +142,7 @@ public final class AiSearchService {
         HttpURLConnection c = open(url, "GET", SEARCH_TIMEOUT_MS);
         try {
             int code = c.getResponseCode();
-            if (code == 503) {
-                throw new ClipDisabledException(
-                        "Text search needs CLIP enabled in the AI service config.");
-            }
-            if (code != 200) throw new IOException("/search returned HTTP " + code);
+            checkErrorCode(code, c, "/search");
             return parseHits(readBody(c));
         } finally { c.disconnect(); }
     }
@@ -148,9 +154,42 @@ public final class AiSearchService {
         HttpURLConnection c = open(url, "GET", SEARCH_TIMEOUT_MS);
         try {
             int code = c.getResponseCode();
-            if (code != 200) throw new IOException("/similar returned HTTP " + code);
+            checkErrorCode(code, c, "/similar");
             return parseHits(readBody(c));
         } finally { c.disconnect(); }
+    }
+
+    /**
+     * Maps the service's error contract, PRESERVING the body's {@code detail}
+     * (it carries actionable instructions — e.g. the 409 message tells the user to
+     * delete the index and re-run ingest; swallowing it leaves them with a bare
+     * "HTTP 409").
+     */
+    private static void checkErrorCode(int code, HttpURLConnection c, String endpoint)
+            throws IOException {
+        if (code == 200) return;
+        String detail = readErrorDetail(c);
+        switch (code) {
+            case 503 -> throw new ClipDisabledException(detail != null ? detail
+                    : "Search needs CLIP enabled in the AI service config.");
+            case 409 -> throw new IndexOutdatedException(detail != null ? detail
+                    : "The CLIP index was built with an older/incompatible scheme — "
+                    + "delete clip_embeddings.faiss and meta.json, then re-run ingest.");
+            default  -> throw new IOException(endpoint + " returned HTTP " + code
+                    + (detail != null ? ": " + detail : ""));
+        }
+    }
+
+    /** Reads FastAPI's {"detail": "..."} error body (best effort, may be null). */
+    private static String readErrorDetail(HttpURLConnection c) {
+        try {
+            java.io.InputStream es = c.getErrorStream();
+            if (es == null) return null;
+            String body = new String(es.readAllBytes(), StandardCharsets.UTF_8);
+            Map<String, Object> root = MiniJson.parseObject(body);
+            Object d = root.get("detail");
+            return d != null ? d.toString() : null;
+        } catch (Exception e) { return null; }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

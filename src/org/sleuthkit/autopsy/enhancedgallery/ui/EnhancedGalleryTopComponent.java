@@ -1658,6 +1658,17 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                             + "(config/clip_categories.json → \"enabled\": true) and the model downloaded.",
                             "CLIP not enabled", JOptionPane.WARNING_MESSAGE);
                 });
+            } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.IndexOutdatedException oe) {
+                handled[0] = true;
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    // The service's detail message carries the fix instruction verbatim
+                    // (delete index files + re-run ingest) — show it, don't paraphrase.
+                    JOptionPane.showMessageDialog(this,
+                            "<html><body style='width:460px'>" + escapeHtml(oe.getMessage())
+                            + "</body></html>",
+                            "AI index needs rebuilding", JOptionPane.WARNING_MESSAGE);
+                });
             } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiTextSearchService.EmbedderUnavailableException ee) {
                 handled[0] = true;
                 SwingUtilities.invokeLater(() -> {
@@ -1776,6 +1787,14 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                         return;
                     }
                     applySemanticHits(hits, "similar to " + label);
+                });
+            } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.IndexOutdatedException oe) {
+                SwingUtilities.invokeLater(() -> {
+                    statusBar.hideSpinner();
+                    JOptionPane.showMessageDialog(this,
+                            "<html><body style='width:460px'>" + escapeHtml(oe.getMessage())
+                            + "</body></html>",
+                            "AI index needs rebuilding", JOptionPane.WARNING_MESSAGE);
                 });
             } catch (Exception ex) {
                 logger.log(Level.WARNING, "Find-similar failed", ex);
