@@ -190,7 +190,7 @@ public class ThumbnailGrid extends JScrollPane {
             if (idx < 0 || idx >= files.size()) return null;
             MediaFile mf = files.get(idx);
             String snip = parent.getSemanticSnippet(mf.getId());
-            String ts   = parent.getSemanticTimestamp(mf.getId());
+            String ts   = parent.getSemanticTimestamp(mf);
             if (snip == null && ts == null) return null;
             StringBuilder sb = new StringBuilder("<html><body style='width:320px'><b>")
                     .append(escapeHtml(mf.getName())).append("</b>");
@@ -562,7 +562,7 @@ public class ThumbnailGrid extends JScrollPane {
                 paintVideoIndicator(g, x + 3, y + 3 + badgeH + 2);
                 // Matched-frame time of a visual AI hit ("▶ 03:24") — tells the
                 // analyst WHERE in the video the match is, right on the tile.
-                String ts = parent.getSemanticTimestamp(mf.getId());
+                String ts = parent.getSemanticTimestamp(mf);
                 if (ts != null) {
                     int indSz = Math.max(14, Math.min(22, thumbSize / 7));
                     paintBadge(g, "▶ " + ts, new Color(0x7A1FA2),

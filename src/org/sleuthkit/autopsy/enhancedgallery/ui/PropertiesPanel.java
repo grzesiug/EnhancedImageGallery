@@ -159,7 +159,7 @@ public class PropertiesPanel extends JPanel {
         // ── Matched text (document text search) ───────────────────────────────
         // Shown at the top so the analyst immediately sees WHY this document matched.
         String snippet = parent.getSemanticSnippet(af.getId());
-        String matchTs = parent.getSemanticTimestamp(mf.getId());
+        String matchTs = parent.getSemanticTimestamp(mf);
         if (snippet != null || matchTs != null) {
             section("Matched " + (matchTs != null ? "frame" : "text"));
             if (matchTs != null) addRow("Time in video", matchTs);

@@ -1495,13 +1495,18 @@ public class EnhancedGalleryTopComponent extends TopComponent {
     }
 
     /**
-     * Matched-frame time for a video hit of the last visual search, formatted as
-     * mm:ss (or h:mm:ss), or null when not a video hit / no visual search active.
+     * Matched-frame time for a VIDEO hit of the last visual search, formatted as
+     * mm:ss (or h:mm:ss), or null for non-videos / no visual search active.
+     *
+     * <p>Gating on media type (not on the value) is deliberate: a video matched in
+     * its first frame legitimately reports 0.0 s — treating that as "no data" hid
+     * the badge on short clips — while images always report 0.0 and must show nothing.
      */
-    public String getSemanticTimestamp(long objId) {
+    public String getSemanticTimestamp(MediaFile mf) {
+        if (mf == null || mf.getMediaType() != MediaFile.MediaType.VIDEO) return null;
         java.util.Map<Long, Double> t = semanticTimestamps;
         if (t == null) return null;
-        Double s = t.get(objId);
+        Double s = t.get(mf.getId());
         return s == null ? null : formatSeconds(s);
     }
 
@@ -1593,7 +1598,11 @@ public class EnhancedGalleryTopComponent extends TopComponent {
         java.util.Map<Long, Double> ts = new java.util.HashMap<>();
         for (var h : hits) {
             if (ids.add(h.fileId())) order.add(h.fileId());
-            if (h.timestampSeconds() > 0) ts.putIfAbsent(h.fileId(), h.timestampSeconds());
+            // Store EVERY timestamp, including 0.0 — for a video that means the
+            // match is in the first frame (00:00), which is common for very short
+            // clips. Images also report 0.0, so image/video is told apart by media
+            // type at DISPLAY time, never by the timestamp value.
+            ts.putIfAbsent(h.fileId(), h.timestampSeconds());
         }
         setSemanticResult(ids, order, null, ts.isEmpty() ? null : ts, label);
     }
@@ -1685,8 +1694,9 @@ public class EnhancedGalleryTopComponent extends TopComponent {
                     svc.ensureRunning();
                     for (var h : svc.search(q, idxDir, topN)) {
                         if (ids.add(h.fileId())) order.add(h.fileId());
-                        if (h.timestampSeconds() > 0)
-                            timestamps.putIfAbsent(h.fileId(), h.timestampSeconds());
+                        // 0.0 is a VALID video timestamp (match in frame 0) — keep it;
+                        // images are excluded by media type when displaying.
+                        timestamps.putIfAbsent(h.fileId(), h.timestampSeconds());
                     }
                 }
             } catch (org.sleuthkit.autopsy.enhancedgallery.search.AiSearchService.ClipDisabledException ce) {
